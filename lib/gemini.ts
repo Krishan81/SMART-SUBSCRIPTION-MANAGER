@@ -109,3 +109,36 @@ console.log("Gemini API request completed.");
 
   return result as ChurnAnalysis;
 }
+export async function generateEmail(input: {
+  name: string;
+  plan: string;
+  reason: string;
+  recommended_action: string;
+}): Promise<string> {
+  const ai = getAI();
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3.5-flash-lite",
+    contents: `Write a short, friendly subscription retention email.
+
+Customer name: ${input.name}
+Subscription plan: ${input.plan}
+Churn risk reason: ${input.reason}
+Recommended action: ${input.recommended_action}
+
+Requirements:
+- Write a helpful and professional email.
+- Include a subject line.
+- Personalize it using the customer's name.
+- Do not make promises or invent discounts.
+- Return only the email text.`,
+  });
+
+  const text = response.text;
+
+  if (!text) {
+    throw new Error("Gemini returned an empty email.");
+  }
+
+  return text.trim();
+}
