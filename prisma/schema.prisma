@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String         @id @default(cuid())
+  email          String         @unique
+  phone          String
+  name           String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  subscriptions  Subscription[]
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  paypalSubscriptionId String    @unique
+  paypalPlanId         String
+  status               String    @default("PENDING")
+  startDate            DateTime?
+  nextBillingDate      DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  userId String
+  user   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  paypalPaymentId String   @unique
+  amount          Decimal  @db.Decimal(10, 2)
+  currency        String   @default("USD")
+  status          String
+  paidAt          DateTime?
+  createdAt       DateTime @default(now())
+
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+}
