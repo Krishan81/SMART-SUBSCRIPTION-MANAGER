@@ -86,6 +86,18 @@ console.log("Gemini API request completed.");
 
   const result = parsed as Record<string, unknown>;
 
+// Enforce consistent risk-level thresholds
+const riskScore = Number(result.risk_score);
+
+const consistentRiskLevel =
+  riskScore <= 30
+    ? "LOW"
+    : riskScore <= 69
+      ? "MEDIUM"
+      : "HIGH";
+
+result.risk_level = consistentRiskLevel;
+
   const validActions = [
     "fix_payment_nudge",
     "discount_30",
