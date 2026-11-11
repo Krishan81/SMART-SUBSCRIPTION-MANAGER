@@ -1,7 +1,36 @@
 import { supabaseAdmin as supabase, isSupabaseServiceConfigured as isSupabaseConfigured } from './supabase-admin';
 import { Subscriber, SubscriberEvent, RiskAction, AllowedActionType, RiskLevel, RiskAnalysisResult } from '@/types/database';
 
-// In-memory fallback store when Supabase is not configured
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Helper to handle database operations
+async function handleDbOp<T>(
+  op: () => Promise<{ data: T | null; error: any }>,
+  mockOp: () => T
+): Promise<T> {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await op();
+    if (error) {
+      // Safe diagnostic logging of error metadata only
+      console.error('[Diagnostic] Supabase query error:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint
+      });
+
+      throw new Error(`Database operation failed: ${error.message}`);
+    }
+    return data as T;
+  }
+
+  if (isProduction) {
+    throw new Error('Database configuration missing');
+  }
+
+  return mockOp();
+}
+
 class MockDB {
   subscribers: Subscriber[] = [
     {
@@ -116,139 +145,122 @@ class MockDB {
     },
   ];
 }
-
 const mockDb = new MockDB();
 
 export async function getSubscribers(): Promise<Subscriber[]> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('subscribers')
-      .select('*')
-      .order('risk_score', { ascending: false });
-    if (!error && data) return data as Subscriber[];
-  }
-  return [...mockDb.subscribers].sort((a, b) => b.risk_score - a.risk_score);
+  return handleDbOp(
+    async () => await supabase!.from('subscribers').select('*').order('risk_score', { ascending: false }),
+    () => [...mockDb.subscribers].sort((a, b) => b.risk_score - a.risk_score)
+  );
 }
 
 export async function getSubscriberById(id: string): Promise<Subscriber | null> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('subscribers')
-      .select('*')
-      .eq('id', id)
-      .single();
-    if (!error && data) return data as Subscriber;
-  }
-  return mockDb.subscribers.find((s) => s.id === id || s.paypal_subscription_id === id) || null;
+  return handleDbOp(
+    async () => await supabase!.from('subscribers').select('*').eq('id', id).maybeSingle(),
+    () => mockDb.subscribers.find((s: Subscriber) => s.id === id || s.paypal_subscription_id === id) || null
+  );
 }
 
 export async function getSubscriberByPayPalId(paypalId: string): Promise<Subscriber | null> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('subscribers')
-      .select('*')
-      .eq('paypal_subscription_id', paypalId)
-      .single();
-    if (!error && data) return data as Subscriber;
-  }
-  return mockDb.subscribers.find((s) => s.paypal_subscription_id === paypalId) || null;
+  return handleDbOp(
+    async () => await supabase!.from('subscribers').select('*').eq('paypal_subscription_id', paypalId).maybeSingle(),
+    () => mockDb.subscribers.find((s: Subscriber) => s.paypal_subscription_id === paypalId) || null
+  );
 }
 
 export async function upsertSubscriber(sub: Partial<Subscriber>): Promise<Subscriber> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('subscribers')
-      .upsert(sub, { onConflict: 'paypal_subscription_id' })
-      .select()
-      .single();
-    if (!error && data) return data as Subscriber;
-  }
+  return handleDbOp(
+    async () => await supabase!.from('subscribers').upsert(sub, { onConflict: 'paypal_subscription_id' }).select().single(),
+    () => {
+      const existingIndex = mockDb.subscribers.findIndex(
+        (s: Subscriber) => s.paypal_subscription_id === sub.paypal_subscription_id || s.id === sub.id
+      );
 
-  // Mock fallback upsert
-  const existingIndex = mockDb.subscribers.findIndex(
-    (s) => s.paypal_subscription_id === sub.paypal_subscription_id || s.id === sub.id
+      if (existingIndex >= 0) {
+        mockDb.subscribers[existingIndex] = {
+          ...mockDb.subscribers[existingIndex],
+          ...sub,
+          updated_at: new Date().toISOString(),
+        };
+        return mockDb.subscribers[existingIndex];
+      } else {
+        const newSub: Subscriber = {
+          id: sub.id || 'sub-' + Math.random().toString(36).substring(2, 9),
+          name: sub.name || 'New Subscriber',
+          email: sub.email || 'subscriber@example.com',
+          paypal_subscription_id: sub.paypal_subscription_id || 'I-SUB-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+          plan: sub.plan || 'Pro Monthly',
+          status: sub.status || 'ACTIVE',
+          risk_score: sub.risk_score ?? 10,
+          risk_level: sub.risk_level || 'Low',
+          risk_reason: sub.risk_reason || 'Initial registration',
+          recommended_action: sub.recommended_action || 'none',
+          created_at: sub.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        mockDb.subscribers.unshift(newSub);
+        return newSub;
+      }
+    }
   );
-
-  if (existingIndex >= 0) {
-    mockDb.subscribers[existingIndex] = {
-      ...mockDb.subscribers[existingIndex],
-      ...sub,
-      updated_at: new Date().toISOString(),
-    };
-    return mockDb.subscribers[existingIndex];
-  } else {
-    const newSub: Subscriber = {
-      id: sub.id || 'sub-' + Math.random().toString(36).substring(2, 9),
-      name: sub.name || 'New Subscriber',
-      email: sub.email || 'subscriber@example.com',
-      paypal_subscription_id: sub.paypal_subscription_id || 'I-SUB-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-      plan: sub.plan || 'Pro Monthly',
-      status: sub.status || 'ACTIVE',
-      risk_score: sub.risk_score ?? 10,
-      risk_level: sub.risk_level || 'Low',
-      risk_reason: sub.risk_reason || 'Initial registration',
-      recommended_action: sub.recommended_action || 'none',
-      created_at: sub.created_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    mockDb.subscribers.unshift(newSub);
-    return newSub;
-  }
 }
 
 export async function getEvents(subscriberId?: string): Promise<SubscriberEvent[]> {
-  if (isSupabaseConfigured && supabase) {
-    let query = supabase.from('events').select('*').order('created_at', { ascending: false });
-    if (subscriberId) {
-      query = query.eq('subscriber_id', subscriberId);
+  return handleDbOp(
+    async () => {
+      let query = supabase!.from('events').select('*').order('created_at', { ascending: false });
+      if (subscriberId) {
+        query = query.eq('subscriber_id', subscriberId);
+      }
+      return await query;
+    },
+    () => {
+      if (subscriberId) {
+        return mockDb.events.filter((e: SubscriberEvent) => e.subscriber_id === subscriberId);
+      }
+      return [...mockDb.events].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
-    const { data, error } = await query;
-    if (!error && data) return data as SubscriberEvent[];
-  }
+  );
+}
 
-  if (subscriberId) {
-    return mockDb.events.filter((e) => e.subscriber_id === subscriberId);
-  }
-  return [...mockDb.events].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+export async function eventExists(paypalEventId: string): Promise<boolean> {
+  return handleDbOp(
+    async () => {
+      const { data, error } = await supabase!.from('events').select('id').eq('paypal_event_id', paypalEventId).maybeSingle();
+      return { data: !!data, error };
+    },
+    () => mockDb.events.some((e: SubscriberEvent) => e.paypal_event_id === paypalEventId)
+  );
 }
 
 export async function createEvent(event: Omit<SubscriberEvent, 'id' | 'created_at'>): Promise<SubscriberEvent> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('events')
-      .insert(event)
-      .select()
-      .single();
-    if (!error && data) return data as SubscriberEvent;
-  }
-
-  const newEvent: SubscriberEvent = {
-    id: 'evt-' + Math.random().toString(36).substring(2, 9),
-    subscriber_id: event.subscriber_id,
-    event_type: event.event_type,
-    event_data: event.event_data,
-    paypal_event_id: event.paypal_event_id,
-    created_at: new Date().toISOString(),
-  };
-  mockDb.events.unshift(newEvent);
-  return newEvent;
+  return handleDbOp(
+    async () => await supabase!.from('events').insert(event).select().single(),
+    () => {
+      const newEvent: SubscriberEvent = {
+        id: 'evt-' + Math.random().toString(36).substring(2, 9),
+        subscriber_id: event.subscriber_id,
+        event_type: event.event_type,
+        event_data: event.event_data,
+        paypal_event_id: event.paypal_event_id,
+        created_at: new Date().toISOString(),
+      };
+      mockDb.events.unshift(newEvent);
+      return newEvent;
+    }
+  );
 }
 
 export async function getActions(): Promise<RiskAction[]> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('actions')
-      .select('*, subscriber:subscribers(*)')
-      .order('created_at', { ascending: false });
-    if (!error && data) return data as RiskAction[];
-  }
-
-  return [...mockDb.actions]
-    .map((a) => ({
-      ...a,
-      subscriber: mockDb.subscribers.find((s) => s.id === a.subscriber_id),
-    }))
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return handleDbOp(
+    async () => await supabase!.from('actions').select('*, subscriber:subscribers(*)').order('created_at', { ascending: false }),
+    () => [...mockDb.actions]
+      .map((a: RiskAction) => ({
+        ...a,
+        subscriber: mockDb.subscribers.find((s: Subscriber) => s.id === a.subscriber_id),
+      }))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  );
 }
 
 export async function createAction(action: {
@@ -257,59 +269,54 @@ export async function createAction(action: {
   status?: string;
   email_content: string;
 }): Promise<RiskAction> {
-  if (isSupabaseConfigured && supabase) {
-    const { data, error } = await supabase
-      .from('actions')
-      .insert({
+  return handleDbOp(
+    async () => await supabase!.from('actions').insert({
         subscriber_id: action.subscriber_id,
         action_type: action.action_type,
         status: action.status || 'PENDING',
         email_content: action.email_content,
-      })
-      .select('*, subscriber:subscribers(*)')
-      .single();
-    if (!error && data) return data as RiskAction;
-  }
-
-  const newAction: RiskAction = {
-    id: 'act-' + Math.random().toString(36).substring(2, 9),
-    subscriber_id: action.subscriber_id,
-    action_type: action.action_type,
-    status: (action.status as any) || 'PENDING',
-    email_content: action.email_content,
-    created_at: new Date().toISOString(),
-    subscriber: mockDb.subscribers.find((s) => s.id === action.subscriber_id),
-  };
-  mockDb.actions.unshift(newAction);
-  return newAction;
+      }).select('*, subscriber:subscribers(*)').single(),
+    () => {
+      const newAction: RiskAction = {
+        id: 'act-' + Math.random().toString(36).substring(2, 9),
+        subscriber_id: action.subscriber_id,
+        action_type: action.action_type,
+        status: (action.status as any) || 'PENDING',
+        email_content: action.email_content,
+        created_at: new Date().toISOString(),
+        subscriber: mockDb.subscribers.find((s: Subscriber) => s.id === action.subscriber_id),
+      };
+      mockDb.actions.unshift(newAction);
+      return newAction;
+    }
+  );
 }
 
 export async function updateActionStatus(
   actionId: string,
   status: 'APPROVED' | 'EXECUTED' | 'REJECTED'
 ): Promise<RiskAction | null> {
-  if (isSupabaseConfigured && supabase) {
-    const updatePayload: any = { status };
-    if (status === 'EXECUTED') {
-      updatePayload.executed_at = new Date().toISOString();
+  return handleDbOp(
+    async () => {
+      const updatePayload: any = { status };
+      if (status === 'EXECUTED') {
+        updatePayload.executed_at = new Date().toISOString();
+      }
+      return await supabase!.from('actions').update(updatePayload).eq('id', actionId).select('*, subscriber:subscribers(*)').single();
+    },
+    () => {
+      const action = mockDb.actions.find((a: RiskAction) => a.id === actionId);
+      if (!action) return null;
+      action.status = status;
+      if (status === 'EXECUTED') {
+        action.executed_at = new Date().toISOString();
+      }
+      return {
+        ...action,
+        subscriber: mockDb.subscribers.find((s: Subscriber) => s.id === action.subscriber_id),
+      };
     }
-    const { data, error } = await supabase
-      .from('actions')
-      .update(updatePayload)
-      .eq('id', actionId)
-      .select('*, subscriber:subscribers(*)')
-      .single();
-    if (!error && data) return data as RiskAction;
-  }
-
-  const action = mockDb.actions.find((a) => a.id === actionId);
-  if (!action) return null;
-  action.status = status;
-  if (status === 'EXECUTED') {
-    action.executed_at = new Date().toISOString();
-  }
-  return {
-    ...action,
-    subscriber: mockDb.subscribers.find((s) => s.id === action.subscriber_id),
-  };
+  );
 }
+
+

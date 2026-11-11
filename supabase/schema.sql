@@ -91,15 +91,14 @@ ALTER TABLE subscribers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE actions ENABLE ROW LEVEL SECURITY;
 
--- Default public/service role access policies for demo/app use
-CREATE POLICY "Allow public read access to subscribers" ON subscribers FOR SELECT USING (true);
-CREATE POLICY "Allow public write access to subscribers" ON subscribers FOR ALL USING (true);
-
-CREATE POLICY "Allow public read access to events" ON events FOR SELECT USING (true);
-CREATE POLICY "Allow public write access to events" ON events FOR ALL USING (true);
-
-CREATE POLICY "Allow public read access to actions" ON actions FOR SELECT USING (true);
-CREATE POLICY "Allow public write access to actions" ON actions FOR ALL USING (true);
+-- Remove permissive public write access policies
+DROP POLICY IF EXISTS "Allow public write access to subscribers" ON subscribers;
+DROP POLICY IF EXISTS "Allow public write access to events" ON events;
+DROP POLICY IF EXISTS "Allow public write access to actions" ON actions;
+-- Keep read access as needed (or remove if strictly internal)
+DROP POLICY IF EXISTS "Allow public read access to subscribers" ON subscribers;
+DROP POLICY IF EXISTS "Allow public read access to events" ON events;
+DROP POLICY IF EXISTS "Allow public read access to actions" ON actions;
 
 -- ----------------------------------------------------------------
 -- SEED DATA (For Testing and End-to-End Demonstration)
