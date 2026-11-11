@@ -117,6 +117,15 @@ class MockDB {
   ];
 }
 
+
+function assertMockFallbackAllowed(): void {
+  if (isSupabaseConfigured || process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'Supabase operation failed or is not configured. Mock fallback is disabled.'
+    );
+  }
+}
+
 const mockDb = new MockDB();
 
 export async function getSubscribers(): Promise<Subscriber[]> {
@@ -127,6 +136,7 @@ export async function getSubscribers(): Promise<Subscriber[]> {
       .order('risk_score', { ascending: false });
     if (!error && data) return data as Subscriber[];
   }
+  assertMockFallbackAllowed();
   return [...mockDb.subscribers].sort((a, b) => b.risk_score - a.risk_score);
 }
 
@@ -136,9 +146,13 @@ export async function getSubscriberById(id: string): Promise<Subscriber | null> 
       .from('subscribers')
       .select('*')
       .eq('id', id)
-      .single();
-    if (!error && data) return data as Subscriber;
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data as Subscriber | null) ?? null;
   }
+
+  assertMockFallbackAllowed();
   return mockDb.subscribers.find((s) => s.id === id || s.paypal_subscription_id === id) || null;
 }
 
@@ -148,9 +162,13 @@ export async function getSubscriberByPayPalId(paypalId: string): Promise<Subscri
       .from('subscribers')
       .select('*')
       .eq('paypal_subscription_id', paypalId)
-      .single();
-    if (!error && data) return data as Subscriber;
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data as Subscriber | null) ?? null;
   }
+
+  assertMockFallbackAllowed();
   return mockDb.subscribers.find((s) => s.paypal_subscription_id === paypalId) || null;
 }
 
@@ -163,6 +181,7 @@ export async function upsertSubscriber(sub: Partial<Subscriber>): Promise<Subscr
       .single();
     if (!error && data) return data as Subscriber;
   }
+  assertMockFallbackAllowed();
 
   // Mock fallback upsert
   const existingIndex = mockDb.subscribers.findIndex(
@@ -196,6 +215,24 @@ export async function upsertSubscriber(sub: Partial<Subscriber>): Promise<Subscr
   }
 }
 
+export async function hasPayPalEvent(paypalEventId: string): Promise<boolean> {
+  if (isSupabaseConfigured && supabase) {
+    const { data, error } = await supabase
+      .from('events')
+      .select('id')
+      .eq('paypal_event_id', paypalEventId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return Boolean(data);
+  }
+
+  assertMockFallbackAllowed();
+  return mockDb.events.some(
+    (event) => event.paypal_event_id === paypalEventId
+  );
+}
+
 export async function getEvents(subscriberId?: string): Promise<SubscriberEvent[]> {
   if (isSupabaseConfigured && supabase) {
     let query = supabase.from('events').select('*').order('created_at', { ascending: false });
@@ -205,6 +242,7 @@ export async function getEvents(subscriberId?: string): Promise<SubscriberEvent[
     const { data, error } = await query;
     if (!error && data) return data as SubscriberEvent[];
   }
+  assertMockFallbackAllowed();
 
   if (subscriberId) {
     return mockDb.events.filter((e) => e.subscriber_id === subscriberId);
@@ -212,14 +250,49 @@ export async function getEvents(subscriberId?: string): Promise<SubscriberEvent[
   return [...mockDb.events].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
-export async function createEvent(event: Omit<SubscriberEvent, 'id' | 'created_at'>): Promise<SubscriberEvent> {
+export async function createEvent(
+  event: Omit<SubscriberEvent, 'id' | 'created_at'>
+): Promise<SubscriberEvent> {
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase
       .from('events')
       .insert(event)
       .select()
       .single();
-    if (!error && data) return data as SubscriberEvent;
+
+    if (error) {
+      if (error.code === '23505' && event.paypal_event_id) {
+        const { data: existing, error: lookupError } = await supabase
+          .from('events')
+          .select()
+          .eq('paypal_event_id', event.paypal_event_id)
+          .maybeSingle();
+
+        if (lookupError) throw lookupError;
+        if (existing) return existing as SubscriberEvent;
+      }
+
+      throw error;
+    }
+
+    if (!data) {
+      throw new Error('Event insert returned no record.');
+    }
+
+    return data as SubscriberEvent;
+  }
+
+  assertMockFallbackAllowed();
+
+  if (
+    event.paypal_event_id &&
+    mockDb.events.some(
+      (existing) => existing.paypal_event_id === event.paypal_event_id
+    )
+  ) {
+    return mockDb.events.find(
+      (existing) => existing.paypal_event_id === event.paypal_event_id
+    )!;
   }
 
   const newEvent: SubscriberEvent = {
@@ -230,6 +303,7 @@ export async function createEvent(event: Omit<SubscriberEvent, 'id' | 'created_a
     paypal_event_id: event.paypal_event_id,
     created_at: new Date().toISOString(),
   };
+
   mockDb.events.unshift(newEvent);
   return newEvent;
 }
@@ -242,6 +316,7 @@ export async function getActions(): Promise<RiskAction[]> {
       .order('created_at', { ascending: false });
     if (!error && data) return data as RiskAction[];
   }
+  assertMockFallbackAllowed();
 
   return [...mockDb.actions]
     .map((a) => ({
@@ -270,6 +345,7 @@ export async function createAction(action: {
       .single();
     if (!error && data) return data as RiskAction;
   }
+  assertMockFallbackAllowed();
 
   const newAction: RiskAction = {
     id: 'act-' + Math.random().toString(36).substring(2, 9),
@@ -289,27 +365,38 @@ export async function updateActionStatus(
   status: 'APPROVED' | 'EXECUTED' | 'REJECTED'
 ): Promise<RiskAction | null> {
   if (isSupabaseConfigured && supabase) {
-    const updatePayload: any = { status };
+    const updatePayload: { status: string; executed_at?: string } = { status };
     if (status === 'EXECUTED') {
       updatePayload.executed_at = new Date().toISOString();
     }
+
     const { data, error } = await supabase
       .from('actions')
       .update(updatePayload)
       .eq('id', actionId)
+      .eq('status', status === 'EXECUTED' ? 'APPROVED' : 'PENDING')
       .select('*, subscriber:subscribers(*)')
-      .single();
-    if (!error && data) return data as RiskAction;
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data as RiskAction | null) ?? null;
   }
+
+  assertMockFallbackAllowed();
 
   const action = mockDb.actions.find((a) => a.id === actionId);
   if (!action) return null;
+  const expectedStatus = status === 'EXECUTED' ? 'APPROVED' : 'PENDING';
+  if (action.status !== expectedStatus) return null;
+
   action.status = status;
   if (status === 'EXECUTED') {
     action.executed_at = new Date().toISOString();
   }
+
   return {
     ...action,
     subscriber: mockDb.subscribers.find((s) => s.id === action.subscriber_id),
   };
 }
+

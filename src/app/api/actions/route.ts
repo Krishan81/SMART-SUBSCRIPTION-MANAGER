@@ -2,55 +2,77 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAction, getActions } from '@/lib/db';
 import { isAllowedActionType } from '@/types/database';
 
-/**
- * GET /api/actions - List all recovery actions
- */
 export async function GET() {
   try {
     const actions = await getActions();
     return NextResponse.json({ actions });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    console.error('Failed to fetch actions:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch recovery actions.' },
+      { status: 500 }
+    );
   }
 }
 
-/**
- * POST /api/actions - Create a new recovery action (STRICT validation)
- */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { subscriber_id, action_type, email_content, status } = body;
+    const body: unknown = await req.json();
 
-    // Validate action_type
-    if (!isAllowedActionType(action_type)) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return NextResponse.json(
-        {
-          error: `Invalid action type: "${action_type}". Only permitted: fix_payment_nudge, discount_30, pause_offer, none`,
-        },
+        { error: 'Invalid request body.' },
         { status: 400 }
       );
     }
 
-    // Validate subscriber_id
-    if (!subscriber_id) {
-      return NextResponse.json({ error: 'subscriber_id is required' }, { status: 400 });
+    const {
+      subscriber_id,
+      action_type,
+      email_content,
+    } = body as Record<string, unknown>;
+
+    if (
+      typeof subscriber_id !== 'string' ||
+      !subscriber_id.trim()
+    ) {
+      return NextResponse.json(
+        { error: 'A valid subscriber_id is required.' },
+        { status: 400 }
+      );
     }
 
-    // Validate email_content
-    if (!email_content) {
-      return NextResponse.json({ error: 'email_content is required' }, { status: 400 });
+    if (typeof action_type !== 'string' || !isAllowedActionType(action_type)) {
+      return NextResponse.json(
+        { error: 'Invalid recovery action type.' },
+        { status: 400 }
+      );
+    }
+
+    if (
+      typeof email_content !== 'string' ||
+      !email_content.trim() ||
+      email_content.length > 10000
+    ) {
+      return NextResponse.json(
+        { error: 'Valid email_content is required (maximum 10000 characters).' },
+        { status: 400 }
+      );
     }
 
     const action = await createAction({
-      subscriber_id,
+      subscriber_id: subscriber_id.trim(),
       action_type,
-      status: status || 'PENDING',
-      email_content,
+      status: 'PENDING',
+      email_content: email_content.trim(),
     });
 
     return NextResponse.json({ action }, { status: 201 });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error) {
+    console.error('Failed to create recovery action:', error);
+    return NextResponse.json(
+      { error: 'Failed to create recovery action.' },
+      { status: 500 }
+    );
   }
 }
