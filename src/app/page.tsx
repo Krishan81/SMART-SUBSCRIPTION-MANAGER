@@ -1,3 +1,4 @@
+import { connection } from 'next/server';
 import { Suspense } from 'react';
 import { Metadata } from 'next';
 import { getSubscribers, getActions } from '@/lib/db';
@@ -13,6 +14,7 @@ export const metadata: Metadata = {
 };
 
 async function DashboardContent() {
+  await connection();
   const [subscribers, actions] = await Promise.all([getSubscribers(), getActions()]);
 
   const total = subscribers.length;

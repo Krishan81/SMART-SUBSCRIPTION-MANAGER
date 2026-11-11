@@ -1,6 +1,8 @@
+import { connection } from 'next/server';
 import { Suspense } from 'react';
 import { Metadata } from 'next';
 import { getActions } from '@/lib/db';
+import ActionControls from '@/components/ActionControls';
 
 export const metadata: Metadata = {
   title: 'Recovery Actions | Subscription Risk Dashboard',
@@ -22,63 +24,47 @@ const actionLabels: Record<string, string> = {
 };
 
 async function ActionsContent() {
+  await connection();
   const actions = await getActions();
 
   if (actions.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-zinc-200 p-12 text-center dark:border-zinc-800">
-        <p className="text-zinc-500 dark:text-zinc-400">No recovery actions found.</p>
+        <p className="text-zinc-500 dark:text-zinc-400">
+          No recovery actions found.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <table className="min-w-full divide-y divide-zinc-200 dark:divide-zinc-800">
         <thead className="bg-zinc-50 dark:bg-zinc-900">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Subscriber
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Action Type
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Status
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Created
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Executed
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-              Email Content
-            </th>
+            {['Subscriber', 'Action Type', 'Status', 'Created', 'Executed', 'Email Content', 'Approval'].map((heading) => (
+              <th key={heading} className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                {heading}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
           {actions.map((action) => (
             <tr key={action.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
               <td className="px-6 py-4">
-                <div>
-                  <div className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-                    {action.subscriber?.name || 'Unknown'}
-                  </div>
-                  <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                    {action.subscriber?.email}
-                  </div>
+                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                  {action.subscriber?.name || 'Unknown'}
+                </div>
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {action.subscriber?.email}
                 </div>
               </td>
               <td className="px-6 py-4 text-sm text-zinc-700 dark:text-zinc-300">
                 {actionLabels[action.action_type] || action.action_type}
               </td>
               <td className="px-6 py-4">
-                <span
-                  className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-                    statusStyles[action.status] || ''
-                  }`}
-                >
+                <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${statusStyles[action.status] || ''}`}>
                   {action.status}
                 </span>
               </td>
@@ -89,9 +75,15 @@ async function ActionsContent() {
                 {action.executed_at ? new Date(action.executed_at).toLocaleString() : '—'}
               </td>
               <td className="px-6 py-4 text-sm text-zinc-600 dark:text-zinc-300">
-                <div className="max-w-xs truncate" title={action.email_content || ''}>
+                <div className="max-w-xs whitespace-pre-wrap break-words">
                   {action.email_content || 'No email content'}
                 </div>
+              </td>
+              <td className="px-6 py-4">
+                <ActionControls
+                  actionId={action.id}
+                  status={action.status}
+                />
               </td>
             </tr>
           ))}
@@ -118,7 +110,7 @@ export default function ActionsPage() {
             Recovery Actions
           </h1>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Approve and execute recovery actions for at-risk subscribers
+            AI-generated retention recommendations requiring administrator approval
           </p>
         </div>
       </header>

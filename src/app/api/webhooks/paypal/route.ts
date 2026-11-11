@@ -1,46 +1,115 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPayPalWebhookSignature } from '@/lib/paypal';
 import { processEventAndRecomputeRisk } from '@/lib/risk-engine';
-import { getEvents } from '@/lib/db';
+import { hasPayPalEvent } from '@/lib/db';
+
+type RecordData = Record<string, unknown>;
+
+function isRecord(value: unknown): value is RecordData {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export async function POST(req: NextRequest) {
   try {
     const rawBody = await req.text();
-    const payload = JSON.parse(rawBody);
+
+    let payload: unknown;
+
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      return NextResponse.json(
+        { error: 'Invalid JSON payload.' },
+        { status: 400 }
+      );
+    }
+
+    if (!isRecord(payload)) {
+      return NextResponse.json(
+        { error: 'Invalid PayPal webhook payload.' },
+        { status: 400 }
+      );
+    }
 
     const headersRecord: Record<string, string> = {};
     req.headers.forEach((value, key) => {
       headersRecord[key] = value;
     });
 
-    const webhookId = process.env.PAYPAL_WEBHOOK_ID || 'your-paypal-webhook-id';
+    const webhookId = process.env.PAYPAL_WEBHOOK_ID;
 
-    // Verify signature
-    const isValid = verifyPayPalWebhookSignature(headersRecord, rawBody, webhookId);
-    if (!isValid) {
-      return NextResponse.json({ error: 'Invalid PayPal webhook signature' }, { status: 401 });
+    if (!webhookId) {
+      return NextResponse.json(
+        { error: 'PayPal webhook configuration is missing.' },
+        { status: 500 }
+      );
     }
 
-    const eventType = payload.event_type || 'BILLING.SUBSCRIPTION.UPDATED';
-    const paypalEventId = payload.id || 'evt-' + Date.now();
-    const resource = payload.resource || {};
+    const isValid = await verifyPayPalWebhookSignature(
+      headersRecord,
+      rawBody,
+      webhookId
+    );
 
-    // Extract subscription ID from PayPal webhook payload structure
+    if (!isValid) {
+      return NextResponse.json(
+        { error: 'Invalid PayPal webhook signature.' },
+        { status: 401 }
+      );
+    }
+
+    const eventType = payload.event_type;
+    const paypalEventId = payload.id;
+    const resource = payload.resource;
+
+    if (
+      typeof eventType !== 'string' ||
+      typeof paypalEventId !== 'string' ||
+      !isRecord(resource)
+    ) {
+      return NextResponse.json(
+        { error: 'Required PayPal event fields are missing.' },
+        { status: 400 }
+      );
+    }
+
+    const supplementaryData = isRecord(resource.supplementary_data)
+      ? resource.supplementary_data
+      : {};
+
+    const relatedIds = isRecord(supplementaryData.related_ids)
+      ? supplementaryData.related_ids
+      : {};
+
     const subscriptionId =
       resource.billing_agreement_id ||
-      resource.id ||
-      resource.subscription_id ||
-      'I-SUB-PAYPAL-101';
+      relatedIds.subscription_id ||
+      (eventType.startsWith('BILLING.SUBSCRIPTION.')
+        ? resource.id
+        : undefined);
 
-    // Idempotency check: check if event already exists
-    const existingEvents = await getEvents();
-    const alreadyProcessed = existingEvents.some((e) => e.paypal_event_id === paypalEventId);
-
-    if (alreadyProcessed) {
-      return NextResponse.json({ status: 'success', message: 'Event already processed (idempotent)' });
+    if (
+      typeof subscriptionId !== 'string' ||
+      !subscriptionId.trim()
+    ) {
+      return NextResponse.json({
+        status: 'ignored',
+        message: 'Event does not contain a recognizable subscription ID.',
+      });
     }
 
-    // Process through risk engine
+    // Prevent processing an event that PayPal has already delivered.
+    const alreadyProcessed = await hasPayPalEvent(paypalEventId);
+
+    if (alreadyProcessed) {
+      return NextResponse.json({
+        status: 'success',
+        message: 'Event already processed.',
+      });
+    }
+
+    // Save the event, recompute risk with Gemini, and create
+    // a pending retention action when one is recommended.
     const result = await processEventAndRecomputeRisk(
       subscriptionId,
       eventType,
@@ -61,8 +130,22 @@ export async function POST(req: NextRequest) {
       recommended_action: result.subscriber.recommended_action,
       action_created: Boolean(result.action),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      error.message === 'PayPal event has already been processed.'
+    ) {
+      return NextResponse.json({
+        status: 'success',
+        message: 'Event already processed.',
+      });
+    }
+
     console.error('PayPal Webhook Error:', error);
-    return NextResponse.json({ error: error.message || 'Internal webhook error' }, { status: 500 });
+
+    return NextResponse.json(
+      { error: 'Internal webhook processing failed.' },
+      { status: 500 }
+    );
   }
 }
