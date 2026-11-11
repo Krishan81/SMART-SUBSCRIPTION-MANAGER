@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPayPalAccessToken } from "@/lib/paypal";
 import { supabase } from "@/lib/supabase";
+import { eventExists } from "@/lib/db";
+import { processEventAndRecomputeRisk } from "@/lib/risk-engine";
 
 type PayPalEvent = {
   id?: string;
@@ -132,11 +134,21 @@ export async function POST(request: NextRequest) {
     const eventType = event.event_type;
     const resource = event.resource;
 
-    if (!eventType || !resource) {
+    if (!eventType || !resource || !event.id) {
       return NextResponse.json(
         { success: false, message: "Incomplete PayPal event" },
         { status: 400 }
       );
+    }
+
+    // Acknowledge completed deliveries without processing them twice.
+    if (await eventExists(event.id)) {
+      return NextResponse.json({
+        success: true,
+        received: true,
+        verified: true,
+        duplicate: true,
+      });
     }
 
     // Resolve the relevant subscription ID from the event.
@@ -274,6 +286,20 @@ export async function POST(request: NextRequest) {
         console.error("Unable to save PayPal payment:", error.message);
         throw error;
       }
+    }
+
+    // Run AI risk analysis after subscription/payment updates succeed.
+    if (paypalSubscriptionId) {
+      await processEventAndRecomputeRisk(
+        paypalSubscriptionId,
+        eventType,
+        {
+          ...(resource as Record<string, unknown>),
+          summary: (event as PayPalEvent & { summary?: string }).summary,
+          create_time: event.create_time,
+        },
+        event.id
+      );
     }
 
     // Record lifecycle, payment, failure and other recognized events.
