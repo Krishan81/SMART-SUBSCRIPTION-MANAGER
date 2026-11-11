@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import RiskBadge from './RiskBadge';
-import { Subscriber, ALLOWED_ACTION_TYPES } from '@/types/database';
+import { Subscriber } from '@/types/database';
 
 interface SubscriberCardProps {
   subscriber: Subscriber;

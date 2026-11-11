@@ -1,5 +1,5 @@
 import { supabaseAdmin as supabase, isSupabaseServiceConfigured as isSupabaseConfigured } from './supabase-admin';
-import { Subscriber, SubscriberEvent, RiskAction, AllowedActionType, RiskLevel, RiskAnalysisResult } from '@/types/database';
+import { Subscriber, SubscriberEvent, RiskAction, AllowedActionType, ActionStatus } from '@/types/database';
 
 // In-memory fallback store when Supabase is not configured
 class MockDB {
@@ -329,7 +329,7 @@ export async function getActions(): Promise<RiskAction[]> {
 export async function createAction(action: {
   subscriber_id: string;
   action_type: AllowedActionType;
-  status?: string;
+  status?: ActionStatus;
   email_content: string;
 }): Promise<RiskAction> {
   if (isSupabaseConfigured && supabase) {
@@ -351,7 +351,7 @@ export async function createAction(action: {
     id: 'act-' + Math.random().toString(36).substring(2, 9),
     subscriber_id: action.subscriber_id,
     action_type: action.action_type,
-    status: (action.status as any) || 'PENDING',
+    status: action.status || 'PENDING',
     email_content: action.email_content,
     created_at: new Date().toISOString(),
     subscriber: mockDb.subscribers.find((s) => s.id === action.subscriber_id),
