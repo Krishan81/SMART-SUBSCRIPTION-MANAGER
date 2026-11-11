@@ -42,3 +42,6 @@ next-env.d.ts
 
 # temporary test scripts
 scripts/paypal-simulator-test.mjs
+
+# generated Prisma files
+/generated/prisma/

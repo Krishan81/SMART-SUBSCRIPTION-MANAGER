@@ -3,14 +3,32 @@ import { verifyPayPalWebhookSignature } from '@/lib/paypal';
 import { processEventAndRecomputeRisk } from '@/lib/risk-engine';
 import { eventExists } from '@/lib/db';
 
+type RecordData = Record<string, unknown>;
+
+function isRecord(value: unknown): value is RecordData {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const rawBody = await req.text();
-    let payload: any;
+
+    let payload: unknown;
+
     try {
       payload = JSON.parse(rawBody);
     } catch {
-      return NextResponse.json({ error: 'Invalid JSON payload' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Invalid JSON payload.' },
+        { status: 400 }
+      );
+    }
+
+    if (!isRecord(payload)) {
+      return NextResponse.json(
+        { error: 'Invalid PayPal webhook payload.' },
+        { status: 400 }
+      );
     }
 
     const headersRecord: Record<string, string> = {};
@@ -22,58 +40,94 @@ export async function POST(req: NextRequest) {
 
     if (!webhookId) {
       console.error('PAYPAL_WEBHOOK_ID is not configured');
-      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'PayPal webhook configuration is missing.' },
+        { status: 500 }
+      );
     }
 
-    // Verify signature
-    const isValid = await verifyPayPalWebhookSignature(headersRecord, rawBody, webhookId);
+    const isValid = await verifyPayPalWebhookSignature(
+      headersRecord,
+      rawBody,
+      webhookId
+    );
+
     if (!isValid) {
-      return NextResponse.json({ error: 'Invalid PayPal webhook signature' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Invalid PayPal webhook signature.' },
+        { status: 401 }
+      );
     }
 
     const eventType = payload.event_type;
+    const paypalEventId = payload.id;
+    const resource = payload.resource;
 
-    // Supported event types allowlist
+    if (
+      typeof eventType !== 'string' ||
+      typeof paypalEventId !== 'string' ||
+      !isRecord(resource)
+    ) {
+      return NextResponse.json(
+        { error: 'Required PayPal event fields are missing.' },
+        { status: 400 }
+      );
+    }
+
     const supportedEvents = [
       'BILLING.SUBSCRIPTION.CANCELLED',
       'BILLING.SUBSCRIPTION.CREATED',
       'BILLING.SUBSCRIPTION.ACTIVATED',
       'BILLING.SUBSCRIPTION.SUSPENDED',
       'PAYMENT.SALE.COMPLETED',
-      'PAYMENT.SALE.DENIED'
+      'PAYMENT.SALE.DENIED',
     ];
 
-    if (!eventType || !supportedEvents.includes(eventType)) {
-      console.log(`Ignoring unsupported event type: ${eventType}`);
-      return NextResponse.json({ status: 'success', message: 'Event ignored' });
+    if (!supportedEvents.includes(eventType)) {
+      return NextResponse.json({
+        status: 'success',
+        message: 'Event ignored.',
+      });
     }
 
-    const paypalEventId = payload.id;
-    if (!paypalEventId) {
-      return NextResponse.json({ error: 'Missing PayPal event ID' }, { status: 400 });
-    }
+    const supplementaryData = isRecord(resource.supplementary_data)
+      ? resource.supplementary_data
+      : {};
 
-    const resource = payload.resource || {};
+    const relatedIds = isRecord(supplementaryData.related_ids)
+      ? supplementaryData.related_ids
+      : {};
 
-    // Extract subscription ID from PayPal webhook payload structure
     const subscriptionId =
       resource.billing_agreement_id ||
-      resource.id ||
-      resource.subscription_id;
+      relatedIds.subscription_id ||
+      resource.subscription_id ||
+      (eventType.startsWith('BILLING.SUBSCRIPTION.')
+        ? resource.id
+        : undefined);
 
-    if (!subscriptionId) {
-      console.error('Could not extract subscription ID from webhook resource');
-      return NextResponse.json({ error: 'Missing subscription ID in event resource' }, { status: 422 });
+    if (
+      typeof subscriptionId !== 'string' ||
+      !subscriptionId.trim()
+    ) {
+      return NextResponse.json(
+        {
+          status: 'ignored',
+          message: 'Event does not contain a recognizable subscription ID.',
+        },
+        { status: 200 }
+      );
     }
 
-    // Idempotency check: check if event already exists
     const alreadyProcessed = await eventExists(paypalEventId);
 
     if (alreadyProcessed) {
-      return NextResponse.json({ status: 'success', message: 'Event already processed (idempotent)' });
+      return NextResponse.json({
+        status: 'success',
+        message: 'Event already processed.',
+      });
     }
 
-    // Process through risk engine
     const result = await processEventAndRecomputeRisk(
       subscriptionId,
       eventType,
@@ -94,8 +148,22 @@ export async function POST(req: NextRequest) {
       recommended_action: result.subscriber.recommended_action,
       action_created: Boolean(result.action),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      error.message === 'PayPal event has already been processed.'
+    ) {
+      return NextResponse.json({
+        status: 'success',
+        message: 'Event already processed.',
+      });
+    }
+
     console.error('PayPal Webhook Error:', error);
-    return NextResponse.json({ error: error.message || 'Internal webhook error' }, { status: 500 });
+
+    return NextResponse.json(
+      { error: 'Internal webhook processing failed.' },
+      { status: 500 }
+    );
   }
 }

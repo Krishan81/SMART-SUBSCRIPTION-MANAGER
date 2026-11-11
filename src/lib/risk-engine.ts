@@ -1,36 +1,101 @@
-import { getSubscriberById, getSubscriberByPayPalId, getEvents, upsertSubscriber, createAction } from './db';
+import {
+  getSubscriberByPayPalId,
+  hasPayPalEvent,
+  getEvents,
+  getActions,
+  upsertSubscriber,
+  createAction,
+  createEvent,
+} from './db';
+
 import { analyzeSubscriberRiskWithGemini } from './gemini';
-import { Subscriber, SubscriberEvent, RiskAction, isAllowedActionType } from '@/types/database';
+
+import {
+  Subscriber,
+  RiskAction,
+  isAllowedActionType,
+  RiskAnalysisResult,
+} from '@/types/database';
+
+
+type EventData = Record<string, unknown>;
+
+function getString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : undefined;
+}
+
+function getInitialStatus(eventType: string): Subscriber['status'] {
+  if (eventType.includes('CANCELLED')) return 'CANCELLED';
+  if (eventType.includes('FAILED') || eventType.includes('DENIED')) {
+    return 'PAYMENT_FAILED';
+  }
+  if (eventType.includes('SUSPENDED')) return 'SUSPENDED';
+  return 'ACTIVE';
+}
 
 export async function processEventAndRecomputeRisk(
   paypalSubscriptionId: string,
   eventType: string,
-  eventData: Record<string, unknown>,
-  paypalEventId?: string
-): Promise<{ subscriber: Subscriber; analysis: any; action?: RiskAction }> {
-  // 1. Identify subscriber by PayPal subscription ID
+  eventData: EventData,
+  paypalEventId: string
+): Promise<{
+  subscriber: Subscriber;
+  analysis: RiskAnalysisResult;
+  action?: RiskAction;
+}> {
+  if (!paypalSubscriptionId.trim() || !paypalEventId.trim()) {
+    throw new Error('A valid PayPal subscription ID and event ID are required.');
+  }
+
+  // Avoid repeating work when PayPal retries an already persisted event.
+  const alreadyProcessed = await hasPayPalEvent(paypalEventId);
+
+  if (alreadyProcessed) {
+    throw new Error('PayPal event has already been processed.');
+  }
+
+  // 1. Find the subscriber associated with the real PayPal subscription.
   let subscriber = await getSubscriberByPayPalId(paypalSubscriptionId);
 
+  // 2. Register a new subscriber if this subscription is not yet known.
   if (!subscriber) {
-    // If subscriber doesn't exist yet, auto-provision a default subscriber record
+    const email = getString(eventData.payer_email);
+
     subscriber = await upsertSubscriber({
-      name: (eventData.subscriber_name as string) || (eventData.payer_email as string)?.split('@')[0] || 'PayPal Subscriber',
-      email: (eventData.payer_email as string) || `subscriber_${Date.now()}@example.com`,
+      name:
+        getString(eventData.subscriber_name) ||
+        email?.split('@')[0] ||
+        'PayPal Subscriber',
+      email: email || `paypal_${paypalSubscriptionId}@example.invalid`,
       paypal_subscription_id: paypalSubscriptionId,
-      plan: (eventData.plan_name as string) || 'Standard Subscription',
-      status: eventType.includes('CANCELLED') ? 'CANCELLED' : eventType.includes('FAILED') ? 'PAYMENT_FAILED' : 'ACTIVE',
+      plan: getString(eventData.plan_name) || 'Standard Subscription',
+      status: getInitialStatus(eventType),
       risk_score: 20,
       risk_level: 'Low',
-      risk_reason: 'Newly registered via webhook event.',
+      risk_reason: 'Newly registered via PayPal webhook.',
       recommended_action: 'none',
     });
   } else {
-    // Update subscriber status based on event type
+    // 3. Update subscriber status from the PayPal event.
     let newStatus = subscriber.status;
-    if (eventType.includes('CANCELLED')) newStatus = 'CANCELLED';
-    else if (eventType.includes('FAILED') || eventType.includes('DENIED')) newStatus = 'PAYMENT_FAILED';
-    else if (eventType.includes('SUSPENDED')) newStatus = 'SUSPENDED';
-    else if (eventType.includes('COMPLETED') || eventType.includes('ACTIVATED')) newStatus = 'ACTIVE';
+
+    if (eventType.includes('CANCELLED')) {
+      newStatus = 'CANCELLED';
+    } else if (
+      eventType.includes('FAILED') ||
+      eventType.includes('DENIED')
+    ) {
+      newStatus = 'PAYMENT_FAILED';
+    } else if (eventType.includes('SUSPENDED')) {
+      newStatus = 'SUSPENDED';
+    } else if (
+      eventType.includes('ACTIVATED') ||
+      eventType.includes('RE-ACTIVATED')
+    ) {
+      newStatus = 'ACTIVE';
+    }
 
     if (newStatus !== subscriber.status) {
       subscriber = await upsertSubscriber({
@@ -40,27 +105,34 @@ export async function processEventAndRecomputeRisk(
     }
   }
 
-  // 2. Save event in events table
-  const { createEvent } = await import('./db');
-  await createEvent({
-    subscriber_id: subscriber.id,
-    event_type: eventType,
-    event_data: eventData,
-    paypal_event_id: paypalEventId || 'evt-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
-  });
+  // 4. Load history and include the incoming event in this analysis.
+  const previousEvents = await getEvents(subscriber.id);
 
-  // 3. Fetch all timeline events for this subscriber
-  const events = await getEvents(subscriber.id);
+  const events = [
+    {
+      id: 'incoming-' + paypalEventId,
+      subscriber_id: subscriber.id,
+      event_type: eventType,
+      event_data: eventData,
+      paypal_event_id: paypalEventId,
+      created_at: new Date().toISOString(),
+    },
+    ...previousEvents,
+  ];
 
-  // 4. Trigger Gemini AI / Heuristic risk analysis
-  const analysis = await analyzeSubscriberRiskWithGemini(subscriber, events);
+  // 5. Recalculate risk using the updated timeline.
+  const analysis = await analyzeSubscriberRiskWithGemini(
+    subscriber,
+    events
+  );
 
-  // Strict validation of recommended action
-  const validAction = isAllowedActionType(analysis.recommended_action)
+  const validAction = isAllowedActionType(
+    analysis.recommended_action
+  )
     ? analysis.recommended_action
     : 'none';
 
-  // 5. Update subscriber risk score, level, reason, and recommended action
+  // 6. Persist the Gemini risk assessment.
   const updatedSubscriber = await upsertSubscriber({
     id: subscriber.id,
     paypal_subscription_id: subscriber.paypal_subscription_id,
@@ -70,16 +142,38 @@ export async function processEventAndRecomputeRisk(
     recommended_action: validAction,
   });
 
-  // 6. If recommended action is not 'none', create a PENDING action in actions table (Admin must approve!)
+  // 7. Create an action awaiting administrator approval.
   let createdAction: RiskAction | undefined;
+
   if (validAction !== 'none') {
-    createdAction = await createAction({
-      subscriber_id: updatedSubscriber.id,
-      action_type: validAction,
-      status: 'PENDING',
-      email_content: analysis.email_content,
-    });
+    const existingActions = await getActions();
+
+    const existingPendingAction = existingActions.find(
+      (existing) =>
+        existing.subscriber_id === updatedSubscriber.id &&
+        existing.action_type === validAction &&
+        existing.status === 'PENDING'
+    );
+
+    if (existingPendingAction) {
+      createdAction = existingPendingAction;
+    } else {
+      createdAction = await createAction({
+        subscriber_id: updatedSubscriber.id,
+        action_type: validAction,
+        status: 'PENDING',
+        email_content: analysis.email_content,
+      });
+    }
   }
+
+  // 7. Persist the event only after risk processing succeeds.
+  await createEvent({
+    subscriber_id: updatedSubscriber.id,
+    event_type: eventType,
+    event_data: eventData,
+    paypal_event_id: paypalEventId,
+  });
 
   return {
     subscriber: updatedSubscriber,
