@@ -1,7 +1,6 @@
-
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { supabase } from "@/lib/supabase";
 
 function demoModeEnabled() {
   return (
@@ -20,9 +19,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const email = request.nextUrl.searchParams
-      .get("email")
-      ?.trim();
+    const email = request.nextUrl.searchParams.get("email")?.trim();
 
     if (!email) {
       return NextResponse.json(
@@ -31,24 +28,18 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Find the user without depending on email letter casing.
-    const user = await prisma.user.findFirst({
-      where: {
-        email: {
-          equals: email,
-          mode: "insensitive",
-        },
-      },
-      select: {
-        id: true,
-      },
-    });
+    const { data: subscriber, error: subscriberError } = await supabase
+      .from("subscribers")
+      .select("id, paypal_subscription_id")
+      .ilike("email", email)
+      .maybeSingle();
 
-    console.log("Payment history diagnostic:", {
-      userFound: Boolean(user),
-    });
+    if (subscriberError) {
+      console.error("Unable to find subscriber:", subscriberError.message);
+      throw subscriberError;
+    }
 
-    if (!user) {
+    if (!subscriber) {
       return NextResponse.json({
         success: true,
         payments: [],
@@ -60,68 +51,41 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Find demo payments directly through their subscription relation.
-    const [demoSubscriptionCount, payments] = await Promise.all([
-      prisma.subscription.count({
-        where: {
-          userId: user.id,
-          paypalSubscriptionId: {
-            startsWith: "DEMO-",
-          },
-        },
-      }),
+    const { data: payments, error: paymentsError } = await supabase
+      .from("payments")
+      .select(
+        "id, paypal_payment_id, paypal_subscription_id, amount, currency, status, paid_at, created_at"
+      )
+      .eq("subscriber_id", subscriber.id)
+      .like("paypal_payment_id", "DEMO-PAY-%")
+      .order("created_at", { ascending: false });
 
-      prisma.payment.findMany({
-        where: {
-          subscription: {
-            userId: user.id,
-            paypalSubscriptionId: {
-              startsWith: "DEMO-",
-            },
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-        select: {
-          id: true,
-          paypalPaymentId: true,
-          amount: true,
-          currency: true,
-          status: true,
-          paidAt: true,
-          createdAt: true,
-          subscription: {
-            select: {
-              paypalSubscriptionId: true,
-            },
-          },
-        },
-      }),
-    ]);
+    if (paymentsError) {
+      console.error("Unable to query payments:", paymentsError.message);
+      throw paymentsError;
+    }
 
-    console.log("Payment history results:", {
-      demoSubscriptionCount,
-      paymentCount: payments.length,
-    });
+    const paymentList = payments ?? [];
+    const demoSubscriptionCount =
+      subscriber.paypal_subscription_id?.startsWith("DEMO-") ? 1 : 0;
 
     return NextResponse.json({
       success: true,
-      payments: payments.map((payment) => ({
+      payments: paymentList.map((payment) => ({
         id: payment.id,
-        paymentId: payment.paypalPaymentId,
-        amount: payment.amount.toString(),
+        paymentId: payment.paypal_payment_id,
+        amount: String(payment.amount),
         currency: payment.currency,
         status: payment.status,
-        paidAt: payment.paidAt,
-        createdAt: payment.createdAt,
-        subscriptionId: payment.subscription.paypalSubscriptionId,
-        simulated: payment.paypalPaymentId.startsWith("DEMO-PAY-"),
+        paidAt: payment.paid_at,
+        createdAt: payment.created_at,
+        subscriptionId: payment.paypal_subscription_id,
+        simulated: payment.paypal_payment_id.startsWith("DEMO-PAY-"),
       })),
       diagnostic: {
         userFound: true,
         demoSubscriptionCount,
-        paymentCount: payments.length,
+        paymentCount: paymentList.length,
       },
     });
   } catch (error) {
@@ -178,13 +142,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const subscription = await prisma.subscription.findUnique({
-      where: {
-        paypalSubscriptionId: subscriptionId,
-      },
-    });
+    const { data: subscriber, error: subscriberError } = await supabase
+      .from("subscribers")
+      .select("id, paypal_subscription_id")
+      .eq("paypal_subscription_id", subscriptionId)
+      .maybeSingle();
 
-    if (!subscription) {
+    if (subscriberError) {
+      console.error("Unable to find demo subscription:", subscriberError.message);
+      throw subscriberError;
+    }
+
+    if (!subscriber) {
       return NextResponse.json(
         { success: false, message: "Demo subscription not found" },
         { status: 404 }
@@ -193,16 +162,26 @@ export async function POST(request: NextRequest) {
 
     const isSuccessful = outcome === "SUCCESS";
 
-    const payment = await prisma.payment.create({
-      data: {
-        paypalPaymentId: `DEMO-PAY-${randomUUID()}`,
+    const { data: payment, error: paymentError } = await supabase
+      .from("payments")
+      .insert({
+        subscriber_id: subscriber.id,
+        paypal_payment_id: `DEMO-PAY-${randomUUID()}`,
+        paypal_subscription_id: subscriptionId,
         amount: amountString,
         currency: "USD",
         status: isSuccessful ? "COMPLETED" : "FAILED",
-        paidAt: isSuccessful ? new Date() : null,
-        subscriptionId: subscription.id,
-      },
-    });
+        paid_at: isSuccessful ? new Date().toISOString() : null,
+      })
+      .select(
+        "id, paypal_payment_id, paypal_subscription_id, amount, currency, status, paid_at"
+      )
+      .single();
+
+    if (paymentError) {
+      console.error("Unable to save demo payment:", paymentError.message);
+      throw paymentError;
+    }
 
     return NextResponse.json(
       {
@@ -213,12 +192,12 @@ export async function POST(request: NextRequest) {
           : "Demo failed payment saved",
         payment: {
           id: payment.id,
-          paymentId: payment.paypalPaymentId,
-          amount: payment.amount.toString(),
+          paymentId: payment.paypal_payment_id,
+          amount: String(payment.amount),
           currency: payment.currency,
           status: payment.status,
-          paidAt: payment.paidAt,
-          subscriptionId: subscription.paypalSubscriptionId,
+          paidAt: payment.paid_at,
+          subscriptionId: payment.paypal_subscription_id,
         },
       },
       { status: 201 }

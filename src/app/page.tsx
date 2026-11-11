@@ -292,22 +292,22 @@ export default function Home() {
     {
       title: "Total Subscriptions",
       count: subscriptions.length,
-      color: "text-blue-600",
+      color: "text-sky-400",
     },
     {
       title: "Active",
       count: activeCount,
-      color: "text-green-700",
+      color: "text-emerald-400",
     },
     {
       title: "Pending",
       count: pendingCount,
-      color: "text-amber-700",
+      color: "text-amber-300",
     },
     {
       title: "Demo Subscriptions",
       count: demoCount,
-      color: "text-purple-600",
+      color: "text-violet-400",
     },
   ];
 
@@ -315,12 +315,12 @@ export default function Home() {
     {
       title: "Total Demo Payments",
       count: payments.length,
-      color: "text-blue-600",
+      color: "text-sky-400",
     },
     {
       title: "Completed Payments",
       count: completedPayments,
-      color: "text-green-700",
+      color: "text-emerald-400",
     },
     {
       title: "Failed Payments",
@@ -330,18 +330,18 @@ export default function Home() {
   ];
 
   return (
-    <main className="min-h-screen bg-white px-4 py-8 text-slate-900 sm:px-6">
+    <main className="min-h-screen bg-[#080B12] px-4 py-8 text-slate-100 sm:px-6">
       <div className="mx-auto max-w-5xl space-y-7">
         <header>
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
             Smart Subscription Manager
           </h1>
-          <p className="mt-2 text-slate-600">
+          <p className="mt-2 text-slate-400">
             Manage and monitor your subscriptions in one place.
           </p>
         </header>
 
-        <section className="rounded-xl border border-amber-500 bg-amber-50 p-4 text-amber-800">
+        <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-200">
           <h2 className="font-bold">Development Demo Mode</h2>
           <p className="mt-2">
             Demo subscriptions and payment outcomes are simulated. They do not
@@ -349,7 +349,7 @@ export default function Home() {
           </p>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 p-6 shadow-sm sm:p-8">
+        <section className="rounded-2xl border border-[#263449] bg-[#0D1422] p-6 shadow-xl shadow-black/20 sm:p-8">
           <h2 className="mb-6 text-2xl font-bold">Create a Subscription</h2>
 
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -364,7 +364,7 @@ export default function Home() {
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="Enter your email address"
                 required
-                className="w-full rounded-lg border border-slate-300 px-3 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-lg border border-[#334155] px-3 py-3 outline-none bg-[#0D1422] text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
             </div>
 
@@ -379,7 +379,7 @@ export default function Home() {
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="Enter your phone number"
                 required
-                className="w-full rounded-lg border border-slate-300 px-3 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-lg border border-[#334155] px-3 py-3 outline-none bg-[#0D1422] text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
             </div>
 
@@ -394,14 +394,14 @@ export default function Home() {
                 onChange={(event) => setPlanId(event.target.value)}
                 placeholder="Enter your PayPal Plan ID"
                 required
-                className="w-full rounded-lg border border-slate-300 px-3 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-lg border border-[#334155] px-3 py-3 outline-none bg-[#0D1422] text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-950/30 transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading ? "Creating Subscription..." : "Create Demo Subscription"}
             </button>
@@ -412,7 +412,7 @@ export default function Home() {
           <div
             role="status"
             aria-live="polite"
-            className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm"
+            className="rounded-lg border border-blue-400/20 bg-blue-500/10 p-4 text-blue-100"
           >
             {message}
           </div>
@@ -421,7 +421,7 @@ export default function Home() {
         <section className="space-y-5">
           <div>
             <h2 className="text-2xl font-bold">My Subscriptions</h2>
-            <p className="mt-2 text-slate-500">
+            <p className="mt-2 text-slate-400">
               Enter your email above, then load your saved subscriptions.
             </p>
           </div>
@@ -430,7 +430,7 @@ export default function Home() {
             type="button"
             onClick={() => loadSubscriptions()}
             disabled={loadingSubscriptions}
-            className="rounded-lg border border-slate-300 px-5 py-3 font-medium transition hover:bg-slate-50 disabled:opacity-60"
+            className="rounded-lg border border-[#334155] px-5 py-3 font-medium transition hover:bg-[#111827] disabled:opacity-60"
           >
             {loadingSubscriptions ? "Loading Subscriptions..." : "Refresh Subscriptions"}
           </button>
@@ -441,9 +441,9 @@ export default function Home() {
                 {summaryCards.map((card) => (
                   <div
                     key={card.title}
-                    className="rounded-xl border border-slate-200 p-5"
+                    className="rounded-xl border border-[#263449] bg-[#111827] p-5"
                   >
-                    <p className="text-sm font-medium text-slate-500">
+                    <p className="text-sm font-medium text-slate-400">
                       {card.title}
                     </p>
                     <p className={`mt-2 text-3xl font-bold ${card.color}`}>
@@ -454,7 +454,7 @@ export default function Home() {
               </div>
 
               {subscriptions.length === 0 ? (
-                <div className="rounded-xl border border-slate-200 p-8 text-center text-slate-500">
+                <div className="rounded-xl border border-[#263449] bg-[#111827] p-8 text-center text-slate-400">
                   No subscriptions found for this email address.
                 </div>
               ) : (
@@ -473,14 +473,14 @@ export default function Home() {
                     return (
                       <article
                         key={subscription.id}
-                        className="rounded-xl border border-slate-200 p-5 shadow-sm sm:p-6"
+                        className="rounded-xl border border-[#263449] bg-[#111827] p-5 shadow-sm sm:p-6"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <h3 className="text-lg font-bold">
                               {isDemo ? "Demo Subscription" : "PayPal Subscription"}
                             </h3>
-                            <p className="mt-1 break-all text-sm text-slate-500">
+                            <p className="mt-1 break-all text-sm text-slate-400">
                               {subscription.paypalSubscriptionId}
                             </p>
                           </div>
@@ -488,14 +488,14 @@ export default function Home() {
                           <span
                             className={`rounded-full px-3 py-1 text-sm font-semibold ${
                               subscription.status === "ACTIVE"
-                                ? "bg-green-100 text-green-800"
+                                ? "bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/20"
                                 : subscription.status === "CANCELLED"
-                                  ? "bg-red-100 text-red-800"
+                                  ? "bg-red-400/10 text-red-300 ring-1 ring-red-400/20"
                                   : ["APPROVAL_PENDING", "PENDING"].includes(
                                         subscription.status
                                       )
-                                    ? "bg-amber-100 text-amber-800"
-                                    : "bg-slate-100 text-slate-700"
+                                    ? "bg-amber-400/10 text-amber-300 ring-1 ring-amber-400/20"
+                                    : "bg-slate-700/40 text-slate-300"
                             }`}
                           >
                             {subscription.status.replaceAll("_", " ")}
@@ -504,25 +504,25 @@ export default function Home() {
 
                         <div className="mt-5 grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
                           <div>
-                            <p className="text-slate-500">PayPal Plan ID</p>
+                            <p className="text-slate-400">PayPal Plan ID</p>
                             <p className="mt-1 break-all font-medium">
                               {subscription.paypalPlanId}
                             </p>
                           </div>
                           <div>
-                            <p className="text-slate-500">Start Date</p>
+                            <p className="text-slate-400">Start Date</p>
                             <p className="mt-1 font-medium">
                               {formatDate(subscription.startDate)}
                             </p>
                           </div>
                           <div>
-                            <p className="text-slate-500">Next Billing Date</p>
+                            <p className="text-slate-400">Next Billing Date</p>
                             <p className="mt-1 font-medium">
                               {formatDate(subscription.nextBillingDate)}
                             </p>
                           </div>
                           <div>
-                            <p className="text-slate-500">Created</p>
+                            <p className="text-slate-400">Created</p>
                             <p className="mt-1 font-medium">
                               {formatDate(subscription.createdAt)}
                             </p>
@@ -540,7 +540,7 @@ export default function Home() {
                                 )
                               }
                               disabled={isSimulating}
-                              className="rounded-lg bg-green-600 px-4 py-2 font-semibold text-white transition hover:bg-green-700 disabled:opacity-60"
+                              className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
                             >
                               {simulatingId === `${subscription.paypalSubscriptionId}-SUCCESS`
                                 ? "Saving..."
@@ -571,7 +571,7 @@ export default function Home() {
                                 )
                               }
                               disabled={isCancelling || isSimulating}
-                              className="rounded-lg border border-slate-300 px-4 py-2 font-semibold transition hover:bg-slate-50 disabled:opacity-60"
+                              className="rounded-lg border border-[#334155] px-4 py-2 font-semibold transition hover:bg-[#111827] disabled:opacity-60"
                             >
                               {isCancelling ? "Cancelling..." : "Cancel Subscription"}
                             </button>
@@ -591,7 +591,7 @@ export default function Home() {
             <div className="flex flex-wrap items-end justify-between gap-3">
               <div>
                 <h2 className="text-2xl font-bold">Demo Payment History</h2>
-                <p className="mt-2 text-slate-500">
+                <p className="mt-2 text-slate-400">
                   Successful and failed simulated payments saved in the database.
                 </p>
               </div>
@@ -600,7 +600,7 @@ export default function Home() {
                 type="button"
                 onClick={() => loadPayments()}
                 disabled={loadingPayments}
-                className="rounded-lg border border-slate-300 px-4 py-2 font-medium transition hover:bg-slate-50 disabled:opacity-60"
+                className="rounded-lg border border-[#334155] px-4 py-2 font-medium transition hover:bg-[#111827] disabled:opacity-60"
               >
                 {loadingPayments ? "Refreshing..." : "Refresh Payments"}
               </button>
@@ -610,9 +610,9 @@ export default function Home() {
               {paymentSummary.map((card) => (
                 <div
                   key={card.title}
-                  className="rounded-xl border border-slate-200 p-5"
+                  className="rounded-xl border border-[#263449] bg-[#111827] p-5"
                 >
-                  <p className="text-sm font-medium text-slate-500">
+                  <p className="text-sm font-medium text-slate-400">
                     {card.title}
                   </p>
                   <p className={`mt-2 text-3xl font-bold ${card.color}`}>
@@ -623,18 +623,18 @@ export default function Home() {
             </div>
 
             {loadingPayments && payments.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 p-8 text-center text-slate-500">
+              <div className="rounded-xl border border-[#263449] bg-[#111827] p-8 text-center text-slate-400">
                 Loading payment history...
               </div>
             ) : payments.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 p-8 text-center text-slate-500">
+              <div className="rounded-xl border border-[#263449] bg-[#111827] p-8 text-center text-slate-400">
                 No demo payments found. Use a payment simulation button above
                 to create your first record.
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <div className="overflow-x-auto rounded-xl border border-[#263449] bg-[#0D1422]">
                 <table className="w-full min-w-[700px] text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-600">
+                  <thead className="bg-[#111827] text-slate-300">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Payment ID</th>
                       <th className="px-4 py-3 font-semibold">Amount</th>
@@ -650,7 +650,7 @@ export default function Home() {
                           <span className="block max-w-[230px] break-all font-medium">
                             {payment.paymentId}
                           </span>
-                          <span className="mt-1 block text-xs text-slate-500">
+                          <span className="mt-1 block text-xs text-slate-400">
                             Simulated demo record
                           </span>
                         </td>
@@ -664,20 +664,20 @@ export default function Home() {
                           <span
                             className={`rounded-full px-3 py-1 text-xs font-semibold ${
                               payment.status === "COMPLETED"
-                                ? "bg-green-100 text-green-800"
+                                ? "bg-emerald-400/10 text-emerald-300 ring-1 ring-emerald-400/20"
                                 : payment.status === "FAILED"
-                                  ? "bg-red-100 text-red-800"
-                                  : "bg-slate-100 text-slate-700"
+                                  ? "bg-red-400/10 text-red-300 ring-1 ring-red-400/20"
+                                  : "bg-slate-700/40 text-slate-300"
                             }`}
                           >
                             {payment.status}
                           </span>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-4 text-slate-600">
+                        <td className="whitespace-nowrap px-4 py-4 text-slate-400">
                           {formatDateTime(payment.paidAt ?? payment.createdAt)}
                         </td>
                         <td className="px-4 py-4">
-                          <span className="block max-w-[200px] break-all text-slate-600">
+                          <span className="block max-w-[200px] break-all text-slate-400">
                             {payment.subscriptionId}
                           </span>
                         </td>
@@ -690,7 +690,7 @@ export default function Home() {
           </section>
         )}
 
-        <footer className="border-t border-slate-200 pt-5 text-center text-sm text-slate-500">
+        <footer className="border-t border-[#263449] pt-5 text-center text-sm text-slate-400">
           Smart Subscription Manager · Development Demo
         </footer>
       </div>

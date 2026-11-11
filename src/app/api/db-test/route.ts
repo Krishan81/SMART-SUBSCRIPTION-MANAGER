@@ -1,15 +1,21 @@
 
-import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { supabase } from "@/lib/supabase";
 
 export async function GET() {
   try {
-    const userCount = await prisma.user.count();
+    const { count, error } = await supabase
+      .from("subscribers")
+      .select("id", { count: "exact", head: true });
+
+    if (error) {
+      throw error;
+    }
 
     return NextResponse.json({
       success: true,
-      message: "Connected to Neon successfully!",
-      userCount,
+      database: "Supabase",
+      subscriberCount: count,
     });
   } catch (error) {
     console.error("Database test failed:", error);
@@ -17,7 +23,7 @@ export async function GET() {
     return NextResponse.json(
       {
         success: false,
-        message: "Database connection failed",
+        message: "Supabase database test failed",
       },
       { status: 500 }
     );

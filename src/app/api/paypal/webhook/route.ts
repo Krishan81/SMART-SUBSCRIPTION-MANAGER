@@ -1,7 +1,6 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { getPayPalAccessToken } from "@/lib/paypal";
-import { prisma } from "@/lib/prisma";
+import { supabase } from "@/lib/supabase";
 
 type PayPalEvent = {
   id?: string;
@@ -19,9 +18,25 @@ type PayPalEvent = {
   };
 };
 
+const subscriptionStatuses: Record<string, string> = {
+  "BILLING.SUBSCRIPTION.ACTIVATED": "ACTIVE",
+  "BILLING.SUBSCRIPTION.SUSPENDED": "SUSPENDED",
+  "BILLING.SUBSCRIPTION.CANCELLED": "CANCELLED",
+};
+
+const allowedStatuses = [
+  "APPROVAL_PENDING",
+  "APPROVED",
+  "ACTIVE",
+  "SUSPENDED",
+  "CANCELLED",
+  "EXPIRED",
+];
+
 export async function POST(request: NextRequest) {
   try {
     const rawBody = await request.text();
+
     let event: PayPalEvent;
 
     try {
@@ -33,17 +48,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const transmissionId = request.headers.get(
-      "paypal-transmission-id"
-    );
-    const transmissionTime = request.headers.get(
-      "paypal-transmission-time"
-    );
+    // Verify the PayPal webhook signature.
+    const transmissionId = request.headers.get("paypal-transmission-id");
+    const transmissionTime = request.headers.get("paypal-transmission-time");
     const certUrl = request.headers.get("paypal-cert-url");
     const authAlgo = request.headers.get("paypal-auth-algo");
-    const transmissionSig = request.headers.get(
-      "paypal-transmission-sig"
-    );
+    const transmissionSig = request.headers.get("paypal-transmission-sig");
 
     if (
       !transmissionId ||
@@ -129,82 +139,95 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Subscription lifecycle events identify the subscription
-    // through resource.id.
-    const subscriptionEvents: Record<string, string> = {
-      "BILLING.SUBSCRIPTION.ACTIVATED": "ACTIVE",
-      "BILLING.SUBSCRIPTION.SUSPENDED": "SUSPENDED",
-      "BILLING.SUBSCRIPTION.CANCELLED": "CANCELLED",
-    };
+    // Resolve the relevant subscription ID from the event.
+    const paypalSubscriptionId =
+      eventType.startsWith("BILLING.SUBSCRIPTION.")
+        ? resource.id
+        : resource.billing_agreement_id;
 
-    if (subscriptionEvents[eventType]) {
-      const paypalSubscriptionId = resource.id;
+    if (
+      eventType.startsWith("BILLING.SUBSCRIPTION.") &&
+      !paypalSubscriptionId
+    ) {
+      return NextResponse.json(
+        { success: false, message: "Missing subscription ID" },
+        { status: 400 }
+      );
+    }
 
-      if (!paypalSubscriptionId) {
-        return NextResponse.json(
-          { success: false, message: "Missing subscription ID" },
-          { status: 400 }
-        );
+    let subscriber: { id: string; paypal_subscription_id: string } | null =
+      null;
+
+    if (paypalSubscriptionId) {
+      const { data, error } = await supabase
+        .from("subscribers")
+        .select("id, paypal_subscription_id")
+        .eq("paypal_subscription_id", paypalSubscriptionId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Unable to find subscriber:", error.message);
+        throw error;
       }
 
-      const subscription = await prisma.subscription.findUnique({
-        where: { paypalSubscriptionId },
+      subscriber = data;
+    }
+
+    if (!subscriber) {
+      console.error("No subscriber found for PayPal event:", {
+        eventId: event.id,
+        eventType,
+        paypalSubscriptionId,
       });
 
-      if (!subscription) {
-        console.error(
-          "Subscription not found for PayPal event:",
-          event.id
-        );
+      // Acknowledge the verified event so PayPal does not retry forever.
+      // Investigate unknown subscription IDs in the server logs.
+      return NextResponse.json({
+        success: true,
+        received: true,
+        verified: true,
+        processed: false,
+        message: "Subscriber not found",
+        event_type: eventType,
+      });
+    }
 
-        // Acknowledge the verified event to avoid endless retries.
-        // The event should be investigated in the server logs.
-        return NextResponse.json({
-          success: true,
-          received: true,
-          verified: true,
-          processed: false,
-          message: "Subscription not found",
-          event_type: eventType,
-        });
+    // Update subscription lifecycle status.
+    if (subscriptionStatuses[eventType]) {
+      const { error } = await supabase
+        .from("subscribers")
+        .update({
+          status: subscriptionStatuses[eventType],
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", subscriber.id);
+
+      if (error) {
+        console.error("Unable to update subscriber status:", error.message);
+        throw error;
       }
-
-      await prisma.subscription.update({
-        where: { paypalSubscriptionId },
-        data: {
-          status: subscriptionEvents[eventType],
-        },
-      });
     } else if (eventType === "BILLING.SUBSCRIPTION.UPDATED") {
-      const paypalSubscriptionId = resource.id;
-
-      if (!paypalSubscriptionId) {
-        return NextResponse.json(
-          { success: false, message: "Missing subscription ID" },
-          { status: 400 }
-        );
-      }
-
-      const allowedStatuses = [
-        "APPROVAL_PENDING",
-        "APPROVED",
-        "ACTIVE",
-        "SUSPENDED",
-        "CANCELLED",
-        "EXPIRED",
-      ];
-
       const status = resource.status?.toUpperCase();
 
       if (status && allowedStatuses.includes(status)) {
-        await prisma.subscription.updateMany({
-          where: { paypalSubscriptionId },
-          data: { status },
-        });
+        const { error } = await supabase
+          .from("subscribers")
+          .update({
+            status,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", subscriber.id);
+
+        if (error) {
+          console.error("Unable to update subscriber:", error.message);
+          throw error;
+        }
       }
-    } else if (eventType === "PAYMENT.SALE.COMPLETED") {
+    }
+
+    // Save completed PayPal payments.
+    if (eventType === "PAYMENT.SALE.COMPLETED") {
       const paymentId = resource.id;
-      const paypalSubscriptionId = resource.billing_agreement_id;
       const amount = resource.amount?.total;
       const currency = resource.amount?.currency;
 
@@ -222,55 +245,56 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const subscription = await prisma.subscription.findUnique({
-        where: { paypalSubscriptionId },
-      });
+      const paidAtValue = resource.create_time ?? event.create_time;
+      const parsedPaidAt = paidAtValue ? new Date(paidAtValue) : new Date();
 
-      if (!subscription) {
-        console.error("Payment references an unknown subscription");
-
-        return NextResponse.json({
-          success: true,
-          received: true,
-          verified: true,
-          processed: false,
-          message: "Subscription not found for payment",
-          event_type: eventType,
-        });
+      if (Number.isNaN(parsedPaidAt.getTime())) {
+        return NextResponse.json(
+          { success: false, message: "Invalid payment date" },
+          { status: 400 }
+        );
       }
 
-      const paidAtValue =
-        resource.create_time ?? event.create_time;
+      const { error } = await supabase
+        .from("payments")
+        .upsert(
+          {
+            subscriber_id: subscriber.id,
+            paypal_payment_id: paymentId,
+            paypal_subscription_id: paypalSubscriptionId,
+            amount,
+            currency,
+            status: "COMPLETED",
+            paid_at: parsedPaidAt.toISOString(),
+          },
+          { onConflict: "paypal_payment_id" }
+        );
 
-      const paidAt = paidAtValue
-        ? new Date(paidAtValue)
-        : new Date();
+      if (error) {
+        console.error("Unable to save PayPal payment:", error.message);
+        throw error;
+      }
+    }
 
-      await prisma.payment.upsert({
-        where: { paypalPaymentId: paymentId },
-        update: {
-          amount,
-          currency,
-          status: "COMPLETED",
-          paidAt,
+    // Record lifecycle, payment, failure and other recognized events.
+    const { error: eventError } = await supabase
+      .from("events")
+      .upsert(
+        {
+          subscriber_id: subscriber.id,
+          event_type: eventType,
+          event_data: event,
+          paypal_event_id: event.id ?? null,
         },
-        create: {
-          paypalPaymentId: paymentId,
-          amount,
-          currency,
-          status: "COMPLETED",
-          paidAt,
-          subscriptionId: subscription.id,
-        },
-      });
-    } else if (
-      eventType === "BILLING.SUBSCRIPTION.PAYMENT.FAILED"
-    ) {
-      // A failed payment is not necessarily a suspended subscription.
-      // Persisting this event requires a webhook/event-history table.
-      console.log("Verified PayPal payment failure:", event.id);
-    } else {
-      console.log("Unhandled PayPal event:", eventType);
+        {
+          onConflict: "paypal_event_id",
+          ignoreDuplicates: true,
+        }
+      );
+
+    if (eventError) {
+      console.error("Unable to save PayPal event:", eventError.message);
+      throw eventError;
     }
 
     return NextResponse.json({

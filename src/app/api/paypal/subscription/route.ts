@@ -1,12 +1,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createPayPalSubscription } from "@/lib/paypal";
-import { prisma } from "@/lib/prisma";
-
+import { supabase } from "@/lib/supabase";
 
 export async function GET(request: NextRequest) {
   try {
-    // Allow this demo dashboard endpoint only in local development
     if (
       process.env.NODE_ENV !== "development" ||
       process.env.PAYPAL_DEMO_MODE !== "true"
@@ -29,38 +27,42 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: {
-        subscriptions: {
-          orderBy: { createdAt: "desc" },
-          select: {
-            id: true,
-            paypalSubscriptionId: true,
-            paypalPlanId: true,
-            status: true,
-            startDate: true,
-            nextBillingDate: true,
-            createdAt: true,
-          },
-        },
-      },
-    });
+    const { data, error } = await supabase
+      .from("subscribers")
+      .select(
+        "id, email, name, paypal_subscription_id, plan, status, created_at"
+      )
+      .eq("email", email)
+      .maybeSingle();
 
-    return NextResponse.json({
-      success: true,
-      subscriptions: user?.subscriptions ?? [],
-    });
+    if (error) {
+      console.error("Supabase subscription lookup failed:", error.message);
+      throw error;
+    }
+
+    const subscriptions = data
+      ? [
+          {
+            id: data.id,
+            paypalSubscriptionId: data.paypal_subscription_id,
+            paypalPlanId: data.plan,
+            status: data.status,
+            startDate: null,
+            nextBillingDate: null,
+            createdAt: data.created_at,
+          },
+        ]
+      : [];
+
+    return NextResponse.json({ success: true, subscriptions });
   } catch (error) {
     console.error("Failed to fetch subscriptions:", error);
-
     return NextResponse.json(
       { success: false, message: "Failed to fetch subscriptions" },
       { status: 500 }
     );
   }
 }
-
 
 export async function POST(request: NextRequest) {
   try {
@@ -76,123 +78,126 @@ export async function POST(request: NextRequest) {
         ? body.phone.trim()
         : "";
 
+    const name =
+      typeof body.name === "string" && body.name.trim()
+        ? body.name.trim()
+        : email.split("@")[0];
+
     const planId =
       typeof body.planId === "string"
         ? body.planId.trim()
         : "";
 
-    // Validate email
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "A valid email address is required",
-        },
+        { success: false, message: "A valid email address is required" },
         { status: 400 }
       );
     }
 
-    // Validate phone number
     if (!/^\+?[0-9\s().-]{7,20}$/.test(phone)) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "A valid phone number is required",
-        },
+        { success: false, message: "A valid phone number is required" },
         { status: 400 }
       );
     }
 
-    // Validate PayPal plan ID
     if (!planId) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "planId is required",
-        },
+        { success: false, message: "planId is required" },
         { status: 400 }
       );
     }
 
-    // Save or update the user in Neon
-    const user = await prisma.user.upsert({
-      where: { email },
-      update: { phone },
-      create: {
-        email,
-        phone,
-      },
-    });
-
-    // Enable demo checkout only during local development
     const isDemoMode =
       process.env.NODE_ENV === "development" &&
       process.env.PAYPAL_DEMO_MODE === "true";
 
+    let subscriptionId: string;
+    let status: string;
+    let approvalUrl: string | undefined;
+
     if (isDemoMode) {
-      const demoSubscriptionId = `DEMO-${crypto.randomUUID()}`;
-      const now = new Date();
+      subscriptionId = `DEMO-${crypto.randomUUID()}`;
+      status = "ACTIVE";
+    } else {
+      const subscription = await createPayPalSubscription(planId);
 
-      // Calculate the next monthly billing date
-      const nextBillingDate = new Date(now);
-      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1);
+      if (!subscription.id) {
+        throw new Error("PayPal did not return a subscription ID");
+      }
 
-      const demoSubscription = await prisma.subscription.create({
-        data: {
-          paypalSubscriptionId: demoSubscriptionId,
-          paypalPlanId: planId,
-          status: "ACTIVE",
-          startDate: now,
-          nextBillingDate,
-          userId: user.id,
+      const approvalLink = subscription.links?.find(
+        (link: { rel: string; href: string }) =>
+          link.rel === "approve"
+      );
+
+      if (!approvalLink?.href) {
+        throw new Error("PayPal did not return an approval URL");
+      }
+
+      subscriptionId = subscription.id;
+      status = subscription.status ?? "PENDING";
+      approvalUrl = approvalLink.href;
+    }
+
+    // The shared schema allows one subscriber row per email.
+    const { data: subscriber, error } = await supabase
+      .from("subscribers")
+      .upsert(
+        {
+          email,
+          name,
+          paypal_subscription_id: subscriptionId,
+          plan: planId,
+          status,
+        },
+        { onConflict: "email" }
+      )
+      .select(
+        "id, email, paypal_subscription_id, plan, status"
+      )
+      .single();
+
+    if (error) {
+      console.error("Supabase subscriber save failed:", error.message);
+      throw error;
+    }
+
+    // Record the event for the team's event history.
+    const { error: eventError } = await supabase
+      .from("events")
+      .insert({
+        subscriber_id: subscriber.id,
+        event_type: isDemoMode
+          ? "DEMO.SUBSCRIPTION.CREATED"
+          : "PAYPAL.SUBSCRIPTION.CREATED",
+        event_data: {
+          paypalSubscriptionId: subscriptionId,
+          planId,
+          status,
         },
       });
 
-      return NextResponse.json({
-        success: true,
-        demoMode: true,
-        subscriptionId: demoSubscription.paypalSubscriptionId,
-        status: demoSubscription.status,
-        message:
-          "Demo subscription activated successfully. No payment was collected.",
-      });
+    if (eventError) {
+      console.error("Failed to record subscription event:", eventError.message);
     }
-
-    // Real PayPal checkout remains unchanged
-    const subscription = await createPayPalSubscription(planId);
-
-    if (!subscription.id) {
-      throw new Error("PayPal did not return a subscription ID");
-    }
-
-    const approvalLink = subscription.links?.find(
-      (link: { rel: string; href: string }) =>
-        link.rel === "approve"
-    );
-
-    if (!approvalLink?.href) {
-      throw new Error("PayPal did not return an approval URL");
-    }
-
-    // Save the real PayPal subscription in Neon
-    await prisma.subscription.create({
-      data: {
-        paypalSubscriptionId: subscription.id,
-        paypalPlanId: planId,
-        status: subscription.status ?? "PENDING",
-        userId: user.id,
-      },
-    });
 
     return NextResponse.json({
       success: true,
-      demoMode: false,
-      subscriptionId: subscription.id,
-      approvalUrl: approvalLink.href,
+      demoMode: isDemoMode,
+      subscriptionId: subscriber.paypal_subscription_id,
+      status: subscriber.status,
+      ...(approvalUrl ? { approvalUrl } : {}),
+      ...(isDemoMode
+        ? {
+            message:
+              "Demo subscription activated successfully. No payment was collected.",
+          }
+        : {}),
     });
   } catch (error) {
     console.error("Subscription creation failed:", error);
-
     return NextResponse.json(
       {
         success: false,
