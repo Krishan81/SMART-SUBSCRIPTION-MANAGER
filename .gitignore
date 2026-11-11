@@ -5,13 +5,24 @@
 
 # Dependencies
 node_modules/
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
 
-# Next.js
+# Next.js and builds
 .next/
 out/
 build/
+.vercel/
 
-# Generated Prisma Client
+# Testing
+coverage/
+
+# Generated Prisma files
 /generated/prisma/
 
 # TypeScript
@@ -20,6 +31,16 @@ next-env.d.ts
 
 # macOS
 .DS_Store
+
+# Certificates and logs
+*.pem
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Temporary test scripts
+scripts/paypal-simulator-test.mjs
 
 # Local tools and AI agents
 .agents/
