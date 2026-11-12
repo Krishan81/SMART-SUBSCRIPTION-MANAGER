@@ -27,6 +27,33 @@ function cleanText(value: unknown, fallback: string): string {
     : fallback;
 }
 
+async function generateGeminiContent(ai: GoogleGenAI, prompt: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await ai.models.generateContent({
+        model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
+    } catch (error) {
+      const status =
+        typeof error === 'object' && error !== null && 'status' in error
+          ? error.status
+          : undefined;
+
+      if (![429, 500, 503].includes(Number(status)) || attempt === 2) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+
+  throw new Error('Gemini request failed after retries.');
+}
+
 export async function analyzeSubscriberRiskWithGemini(
   subscriber: Subscriber,
   events: SubscriberEvent[]
@@ -56,6 +83,10 @@ ${JSON.stringify({
   plan: subscriber.plan,
   status: subscriber.status,
   created_at: subscriber.created_at,
+  last_payment_at: subscriber.last_payment_at ?? null,
+  next_payment_at: subscriber.next_payment_at ?? null,
+  risk_score: subscriber.risk_score,
+  risk_level: subscriber.risk_level,
 })}
 
 RECENT EVENTS:
@@ -79,18 +110,16 @@ Rules:
 - risk_score must be an integer from 0 to 100.
 - Never invent payment events or subscriber information.
 - Base recommendations on actual evidence.
+- For CANCELLED or PENDING subscriptions, recommend none.
+- For PAYMENT_FAILED subscriptions, prioritize fix_payment_nudge.
+- For SUSPENDED subscriptions, recommend pause_offer.
+- For ACTIVE subscriptions, select an action based on demonstrated churn risk.
 - Do not promise discounts or account changes as approved.
 - Generate an email draft only. Never claim it has been sent.
 - Keep the email professional and concise.
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
+    const response = await generateGeminiContent(ai, prompt);
 
     const responseText = response.text?.trim();
 
@@ -129,6 +158,7 @@ Rules:
     return {
       risk_score: score,
       risk_level: getRiskLevel(score),
+      analysis_source: 'gemini',
       risk_reason: cleanText(
         parsed.risk_reason,
         'AI risk evaluation completed.'
@@ -178,13 +208,14 @@ function calculateHeuristicRisk(
     score = Math.min(100, 75 + failedEvents.length * 5);
     reason = `${failedEvents.length} payment failure event(s) recorded. Payment method review may be required.`;
     action = 'fix_payment_nudge';
-  } else if (
-    subscriber.status === 'CANCELLED' ||
-    cancelledEvents.length > 0
-  ) {
+  } else if (subscriber.status === 'CANCELLED') {
     score = 90;
-    reason = 'Subscription cancellation was recorded.';
-    action = 'pause_offer';
+    reason = 'Subscription is cancelled; active retention intervention is not applicable.';
+    action = 'none';
+  } else if (subscriber.status === 'PENDING') {
+    score = 15;
+    reason = 'Subscription approval is pending.';
+    action = 'none';
   } else if (
     subscriber.status === 'SUSPENDED' ||
     suspendedEvents.length > 0
@@ -210,6 +241,7 @@ function calculateHeuristicRisk(
   return {
     risk_score: score,
     risk_level: getRiskLevel(score),
+    analysis_source: 'heuristic',
     risk_reason: reason,
     recommended_action: action,
     email_content: emailTemplates[action],

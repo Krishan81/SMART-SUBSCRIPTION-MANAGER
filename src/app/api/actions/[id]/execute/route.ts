@@ -1,25 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
-import { getActions, updateActionStatus } from '@/lib/db';
+import { isRetentionAuthorized } from '@/lib/retention-auth';
+import { getActions, updateActionEmailAccepted } from '@/lib/db';
 import { sendRetentionEmail } from '@/lib/email';
 
-
-function isAuthorized(req: NextRequest): boolean {
-  const secret = process.env.RETENTION_EXECUTION_SECRET;
-
-  if (!secret) return false;
-
-  const supplied = req.headers.get('authorization') || '';
-  const expected = `Bearer ${secret}`;
-
-  const suppliedBuffer = Buffer.from(supplied);
-  const expectedBuffer = Buffer.from(expected);
-
-  return (
-    suppliedBuffer.length === expectedBuffer.length &&
-    timingSafeEqual(suppliedBuffer, expectedBuffer)
-  );
-}
 
 export async function POST(
   req: NextRequest,
@@ -33,7 +16,7 @@ export async function POST(
       );
     }
 
-    if (!isAuthorized(req)) {
+    if (!isRetentionAuthorized(req)) {
       return NextResponse.json(
         { error: 'Unauthorized.' },
         { status: 401 }
@@ -92,6 +75,19 @@ export async function POST(
       );
     }
 
+    if (req.nextUrl.searchParams.get("dryRun") === "true") {
+      return NextResponse.json({
+        success: true,
+        dryRun: true,
+        message: "Validation passed. No email was sent and no database changes were made.",
+        actionId: action.id,
+        actionStatus: action.status,
+        emailConfigured: Boolean(
+          process.env.RESEND_API_KEY && process.env.RETENTION_EMAIL_FROM
+        ),
+      });
+    }
+
     const emailResult = await sendRetentionEmail({
       actionId: action.id,
       to: action.subscriber.email,
@@ -99,9 +95,9 @@ export async function POST(
       content: action.email_content,
     });
 
-    const updatedAction = await updateActionStatus(
+    const updatedAction = await updateActionEmailAccepted(
       action.id,
-      'EXECUTED'
+      emailResult.emailId
     );
 
     if (!updatedAction) {

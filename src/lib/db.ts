@@ -323,3 +323,177 @@ export async function updateActionStatus(
 
 // Alias used by the AI risk engine and PayPal webhook.
 export { eventExists as hasPayPalEvent };
+
+// Retention safeguards and outcome analytics.
+export async function hasOpenAction(
+  subscriberId: string,
+  actionType: AllowedActionType
+): Promise<boolean> {
+  return handleDbOp(
+    async () => {
+      const { data, error } = await supabase!
+        .from('actions')
+        .select('id')
+        .eq('subscriber_id', subscriberId)
+        .eq('action_type', actionType)
+        .in('status', ['PENDING', 'APPROVED'])
+        .limit(1);
+
+      return { data: (data ?? []).length > 0, error };
+    },
+    () => mockDb.actions.some(
+      (action) =>
+        action.subscriber_id === subscriberId &&
+        action.action_type === actionType &&
+        ['PENDING', 'APPROVED'].includes(action.status)
+    )
+  );
+}
+
+export async function hasRecentAction(
+  subscriberId: string,
+  actionType: AllowedActionType,
+  cooldownDays = 7
+): Promise<boolean> {
+  const cutoff = new Date(
+    Date.now() - cooldownDays * 24 * 60 * 60 * 1000
+  ).toISOString();
+
+  return handleDbOp(
+    async () => {
+      const { data, error } = await supabase!
+        .from('actions')
+        .select('id')
+        .eq('subscriber_id', subscriberId)
+        .eq('action_type', actionType)
+        .in('status', ['EXECUTED', 'REJECTED'])
+        .gte('created_at', cutoff)
+        .limit(1);
+
+      return { data: (data ?? []).length > 0, error };
+    },
+    () => mockDb.actions.some(
+      (action) =>
+        action.subscriber_id === subscriberId &&
+        action.action_type === actionType &&
+        ['EXECUTED', 'REJECTED'].includes(action.status) &&
+        action.created_at >= cutoff
+    )
+  );
+}
+
+export interface RetentionOutcomeStats {
+  total: number;
+  retained: number;
+  churned: number;
+  unconfirmed: number;
+  unknown: number;
+}
+
+export async function getRetentionOutcomeStats(): Promise<RetentionOutcomeStats> {
+  const summarize = (outcomes: Array<string | null | undefined>) => ({
+    total: outcomes.length,
+    retained: outcomes.filter((value) => value === 'RETAINED').length,
+    churned: outcomes.filter((value) => value === 'CHURNED').length,
+    unconfirmed: outcomes.filter((value) => value === 'UNCONFIRMED').length,
+    unknown: outcomes.filter((value) => !value || value === 'UNKNOWN').length,
+  });
+
+  return handleDbOp(
+    async () => {
+      const { data, error } = await supabase!
+        .from('actions')
+        .select('outcome');
+
+      return {
+        data: summarize((data ?? []).map((row) => row.outcome)),
+        error,
+      };
+    },
+    () => summarize(
+      mockDb.actions.map(
+        (action) =>
+          (action as RiskAction & { outcome?: string }).outcome
+      )
+    )
+  );
+}
+
+export async function updateActionEmailAccepted(
+  actionId: string,
+  emailProviderId: string
+): Promise<RiskAction | null> {
+  if (!actionId.trim() || !emailProviderId.trim()) {
+    throw new Error('Action ID and email provider ID are required.');
+  }
+
+  const acceptedAt = new Date().toISOString();
+
+  return handleDbOp(
+    async () => await supabase!
+      .from('actions')
+      .update({
+        status: 'EXECUTED',
+        executed_at: acceptedAt,
+        email_provider_id: emailProviderId,
+        email_accepted_at: acceptedAt,
+      })
+      .eq('id', actionId)
+      .eq('status', 'APPROVED')
+      .select('*, subscriber:subscribers(*)')
+      .maybeSingle(),
+    () => {
+      const action = mockDb.actions.find(
+        (item) => item.id === actionId && item.status === 'APPROVED'
+      );
+
+      if (!action) return null;
+
+      action.status = 'EXECUTED';
+      action.executed_at = acceptedAt;
+      action.email_provider_id = emailProviderId;
+      action.email_accepted_at = acceptedAt;
+
+      return {
+        ...action,
+        subscriber: mockDb.subscribers.find(
+          (item) => item.id === action.subscriber_id
+        ),
+      };
+    }
+  );
+}
+
+export async function updateSubscriberByPayPalId(
+  paypalId: string,
+  updates: Partial<Subscriber>
+): Promise<Subscriber> {
+  return handleDbOp(
+    async () => await supabase!
+      .from('subscribers')
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('paypal_subscription_id', paypalId)
+      .select()
+      .single(),
+    () => {
+      const index = mockDb.subscribers.findIndex(
+        (subscriber) => subscriber.paypal_subscription_id === paypalId
+      );
+
+      if (index === -1) {
+        throw new Error('Subscriber not found.');
+      }
+
+      mockDb.subscribers[index] = {
+        ...mockDb.subscribers[index],
+        ...updates,
+        updated_at: new Date().toISOString(),
+      };
+
+      return mockDb.subscribers[index];
+    }
+  );
+}
