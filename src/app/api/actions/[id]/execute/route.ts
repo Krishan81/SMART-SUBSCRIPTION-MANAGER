@@ -1,42 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual } from 'node:crypto';
 import { getActions, updateActionStatus } from '@/lib/db';
 import { sendRetentionEmail } from '@/lib/email';
-
-
-function isAuthorized(req: NextRequest): boolean {
-  const secret = process.env.RETENTION_EXECUTION_SECRET;
-
-  if (!secret) return false;
-
-  const supplied = req.headers.get('authorization') || '';
-  const expected = `Bearer ${secret}`;
-
-  const suppliedBuffer = Buffer.from(supplied);
-  const expectedBuffer = Buffer.from(expected);
-
-  return (
-    suppliedBuffer.length === expectedBuffer.length &&
-    timingSafeEqual(suppliedBuffer, expectedBuffer)
-  );
-}
+import { createAdminClient } from '@/lib/supabase-server';
 
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    if (!process.env.RETENTION_EXECUTION_SECRET) {
+    // Admin authorization check - only authenticated admins can execute
+    const supabase = await createAdminClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
       return NextResponse.json(
-        { error: 'Retention execution authorization is not configured.' },
-        { status: 503 }
+        { error: 'Unauthorized: Admin authentication required.' },
+        { status: 401 }
       );
     }
 
-    if (!isAuthorized(req)) {
+    const userRole = user.app_metadata?.role;
+    if (userRole !== 'admin') {
       return NextResponse.json(
-        { error: 'Unauthorized.' },
-        { status: 401 }
+        { error: 'Forbidden: Admin authorization required.' },
+        { status: 403 }
       );
     }
 
@@ -92,12 +81,24 @@ export async function POST(
       );
     }
 
-    const emailResult = await sendRetentionEmail({
-      actionId: action.id,
-      to: action.subscriber.email,
-      subject,
-      content: action.email_content,
-    });
+    let emailId = null;
+
+    try {
+      const emailResult = await sendRetentionEmail({
+        actionId: action.id,
+        to: action.subscriber.email,
+        subject,
+        content: action.email_content,
+      });
+      emailId = emailResult.emailId;
+    } catch (emailError) {
+      console.error('Retention email failed:', emailError);
+      // Do NOT update action status - leave as APPROVED for retry
+      return NextResponse.json(
+        { error: 'Retention email failed. Action remains approved for retry.' },
+        { status: 500 }
+      );
+    }
 
     const updatedAction = await updateActionStatus(
       action.id,
@@ -105,16 +106,14 @@ export async function POST(
     );
 
     if (!updatedAction) {
-      console.error(
-        'Email provider accepted the email, but action status update failed:',
-        action.id,
-        emailResult.emailId
-      );
-
+      // Email was accepted by provider, but status update failed.
+      // This is a rare edge case; return success with warning.
       return NextResponse.json(
         {
-          error: 'Email accepted by provider, but action status update failed.',
-          emailAccepted: true,
+          success: true,
+          message: 'Email accepted by provider, but action status update failed.',
+          emailId,
+          emailAcceptionWarning: true,
         },
         { status: 500 }
       );
@@ -123,7 +122,7 @@ export async function POST(
     return NextResponse.json({
       success: true,
       message: 'Email accepted by the email provider.',
-      emailId: emailResult.emailId,
+      emailId,
       action: updatedAction,
     });
   } catch (error) {

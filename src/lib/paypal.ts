@@ -56,6 +56,15 @@ export async function verifyPayPalWebhookSignature(
       ? 'https://api-m.paypal.com'
       : 'https://api-m.sandbox.paypal.com';
 
+  console.log('[PayPal Diagnostics] Base URL:', baseUrl);
+  console.log('[PayPal Diagnostics] Headers presence:', {
+    hasAuthAlgo: !!authAlgo,
+    hasCertUrl: !!certUrl,
+    hasTransmissionId: !!transmissionId,
+    hasTransmissionSig: !!transmissionSig,
+    hasTransmissionTime: !!transmissionTime,
+  });
+
   const credentials = Buffer.from(
     `${clientId}:${clientSecret}`
   ).toString('base64');
@@ -73,7 +82,10 @@ export async function verifyPayPalWebhookSignature(
     }
   );
 
+  console.log('[PayPal Diagnostics] Token response status:', tokenResponse.status, tokenResponse.statusText);
   if (!tokenResponse.ok) {
+    const errorText = await tokenResponse.text();
+    console.log('[PayPal Diagnostics] Token error response:', errorText);
     throw new Error('PayPal OAuth authentication failed.');
   }
 
@@ -82,6 +94,8 @@ export async function verifyPayPalWebhookSignature(
   if (typeof tokenData.access_token !== 'string') {
     throw new Error('PayPal did not return a valid access token.');
   }
+
+  console.log('[PayPal Diagnostics] Token access_token present:', typeof tokenData.access_token === 'string');
 
   const verificationResponse = await fetch(
     `${baseUrl}/v1/notifications/verify-webhook-signature`,
@@ -104,11 +118,15 @@ export async function verifyPayPalWebhookSignature(
     }
   );
 
+  console.log('[PayPal Diagnostics] Verification response status:', verificationResponse.status, verificationResponse.statusText);
   if (!verificationResponse.ok) {
+    const errorText = await verificationResponse.text();
+    console.log('[PayPal Diagnostics] Verification error response:', errorText);
     throw new Error('PayPal webhook verification request failed.');
   }
 
   const verification = await verificationResponse.json();
+  console.log('[PayPal Diagnostics] Verification result:', verification);
 
   return verification.verification_status === 'SUCCESS';
 }

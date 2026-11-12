@@ -10,9 +10,13 @@ export const isSupabaseConfigured = Boolean(
   !supabaseAnonKey.includes('your-supabase')
 );
 
-// Client-side / Public-facing client
+// Client-side / Public-facing client with persistent sessions enabled
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: { persistSession: false },
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
     })
   : null;

@@ -223,7 +223,7 @@ export async function getEvents(subscriberId?: string): Promise<SubscriberEvent[
   );
 }
 
-export async function eventExists(paypalEventId: string): Promise<boolean> {
+export async function hasPayPalEvent(paypalEventId: string): Promise<boolean> {
   return handleDbOp(
     async () => {
       const { data, error } = await supabase!.from('events').select('id').eq('paypal_event_id', paypalEventId).maybeSingle();

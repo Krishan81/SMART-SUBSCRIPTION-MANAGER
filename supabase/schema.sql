@@ -91,14 +91,34 @@ ALTER TABLE subscribers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE actions ENABLE ROW LEVEL SECURITY;
 
--- Remove permissive public write access policies
-DROP POLICY IF EXISTS "Allow public write access to subscribers" ON subscribers;
-DROP POLICY IF EXISTS "Allow public write access to events" ON events;
-DROP POLICY IF EXISTS "Allow public write access to actions" ON actions;
--- Keep read access as needed (or remove if strictly internal)
-DROP POLICY IF EXISTS "Allow public read access to subscribers" ON subscribers;
-DROP POLICY IF EXISTS "Allow public read access to events" ON events;
-DROP POLICY IF EXISTS "Allow public read access to actions" ON actions;
+-- ===== SUBSCRIBERS TABLE POLICIES =====
+-- Allow authenticated readers (anon for dashboard) to read subscribers
+CREATE POLICY "Allow authenticated read access to subscribers" ON subscribers
+    FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Allow anon read access to subscribers" ON subscribers
+    FOR SELECT TO anon USING (true);
+-- Admins/service-role can do everything
+CREATE POLICY "Allow service-role full access to subscribers" ON subscribers
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+-- ===== EVENTS TABLE POLICIES =====
+-- Allow authenticated readers to read events (for dashboard timeline)
+CREATE POLICY "Allow authenticated read access to events" ON events
+    FOR SELECT TO authenticated USING (true);
+-- Allow anon read for public event viewing
+CREATE POLICY "Allow anon read access to events" ON events
+    FOR SELECT TO anon USING (true);
+-- Service-role can insert (webhook) and do everything else
+CREATE POLICY "Allow service-role full access to events" ON events
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
+
+-- ===== ACTIONS TABLE POLICIES =====
+-- Allow authenticated readers to read actions (for dashboard queue)
+CREATE POLICY "Allow authenticated read access to actions" ON actions
+    FOR SELECT TO authenticated USING (true);
+-- Service-role can insert/create actions and do everything else
+CREATE POLICY "Allow service-role full access to actions" ON actions
+    FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 -- ----------------------------------------------------------------
 -- SEED DATA (For Testing and End-to-End Demonstration)
