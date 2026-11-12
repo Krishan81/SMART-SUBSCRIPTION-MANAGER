@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isRetentionAuthorized } from '@/lib/retention-auth';
 import { getActions, updateActionEmailAccepted } from '@/lib/db';
 import { sendRetentionEmail } from '@/lib/email';
+import { createAdminClient } from '@/lib/supabase-server';
 
 
 export async function POST(
@@ -9,6 +10,28 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Admin authorization check
+    const supabase = await createAdminClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Admin authentication required.' },
+        { status: 401 }
+      );
+    }
+
+    const userRole = user.app_metadata?.role;
+    if (userRole !== 'admin') {
+      return NextResponse.json(
+        { error: 'Forbidden: Admin authorization required.' },
+        { status: 403 }
+      );
+    }
+
+    // Original RETENTION_EXECUTION_SECRET check for non-admin API access
     if (!process.env.RETENTION_EXECUTION_SECRET) {
       return NextResponse.json(
         { error: 'Retention execution authorization is not configured.' },

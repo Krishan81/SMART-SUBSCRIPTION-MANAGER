@@ -1,9 +1,31 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAction, getActions } from '@/lib/db';
 import { isAllowedActionType } from '@/types/database';
+import { createAdminClient } from '@/lib/supabase-server';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // Check admin authorization
+    const supabase = await createAdminClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Admin authentication required.' },
+        { status: 401 }
+      );
+    }
+
+    const userRole = user.app_metadata?.role;
+    if (userRole !== 'admin') {
+      return NextResponse.json(
+        { error: 'Forbidden: Admin authorization required.' },
+        { status: 403 }
+      );
+    }
+
     const actions = await getActions();
     return NextResponse.json({ actions });
   } catch (error) {
@@ -17,6 +39,27 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    // Check admin authorization
+    const supabase = await createAdminClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized: Admin authentication required.' },
+        { status: 401 }
+      );
+    }
+
+    const userRole = user.app_metadata?.role;
+    if (userRole !== 'admin') {
+      return NextResponse.json(
+        { error: 'Forbidden: Admin authorization required.' },
+        { status: 403 }
+      );
+    }
+
     const body: unknown = await req.json();
 
     if (!body || typeof body !== 'object' || Array.isArray(body)) {

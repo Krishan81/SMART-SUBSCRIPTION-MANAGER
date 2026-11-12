@@ -223,7 +223,7 @@ export async function getEvents(subscriberId?: string): Promise<SubscriberEvent[
   );
 }
 
-export async function eventExists(paypalEventId: string): Promise<boolean> {
+export async function hasPayPalEvent(paypalEventId: string): Promise<boolean> {
   return handleDbOp(
     async () => {
       const { data, error } = await supabase!.from('events').select('id').eq('paypal_event_id', paypalEventId).maybeSingle();
@@ -322,7 +322,6 @@ export async function updateActionStatus(
 
 
 // Alias used by the AI risk engine and PayPal webhook.
-export { eventExists as hasPayPalEvent };
 
 // Retention safeguards and outcome analytics.
 export async function hasOpenAction(

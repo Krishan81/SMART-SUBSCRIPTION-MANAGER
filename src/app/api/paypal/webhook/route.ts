@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPayPalAccessToken } from "@/lib/paypal";
 import { supabase } from "@/lib/supabase";
-import { eventExists } from "@/lib/db";
+import { hasPayPalEvent } from "@/lib/db";
 import { processEventAndRecomputeRisk } from "@/lib/risk-engine";
 
 type PayPalEvent = {
@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Acknowledge completed deliveries without processing them twice.
-    if (await eventExists(event.id)) {
+    if (await hasPayPalEvent(event.id)) {
       return NextResponse.json({
         success: true,
         received: true,

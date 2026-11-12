@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase-client';
+import { Shield, LogOut, AlertCircle, CheckCircle } from 'lucide-react';
 
 type Props = {
   actionId: string;
@@ -13,7 +15,42 @@ export default function ActionControls({ actionId, status }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Check admin authorization on mount using browser client
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminError, setAdminError] = useState('');
+
+  useEffect(() => {
+    async function checkAdminStatus() {
+      // Use browser client - check if user exists and has app_metadata role
+      if (!supabase) {
+        setIsAdmin(false);
+        return;
+      }
+
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        setIsAdmin(false);
+        return;
+      }
+
+      // Check app_metadata for admin role (client-side check; final auth enforced server-side)
+      const userRole = user.app_metadata?.role;
+      setIsAdmin(userRole === 'admin');
+    }
+
+    checkAdminStatus();
+  }, [supabase]);
+
   async function updateStatus(nextStatus: 'APPROVED' | 'REJECTED') {
+    // Verify admin before allowing update
+    // Note: Final admin authorization enforced server-side via API routes
+    if (!isAdmin) {
+      setError('Administrator privileges required for this action.');
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -51,6 +88,25 @@ export default function ActionControls({ actionId, status }: Props) {
 
   if (status !== 'PENDING') {
     return <span>{status}</span>;
+  }
+
+  // If user is not admin, show disabled/readonly state
+  if (!isAdmin) {
+    return (
+      <div className="flex flex-wrap gap-2">
+        <span
+          className="rounded bg-gray-300 px-3 py-2 text-gray-600 disabled:opacity-50"
+        >
+          {loading ? 'Processing...' : 'Approve'}
+        </span>
+
+        <span
+          className="rounded bg-gray-300 px-3 py-2 text-gray-600 disabled:opacity-50"
+        >
+          Reject
+        </span>
+      </div>
+    );
   }
 
   return (
