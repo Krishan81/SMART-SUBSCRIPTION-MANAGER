@@ -155,7 +155,6 @@ export async function POST(request: NextRequest) {
           paypal_subscription_id: subscriptionId,
           plan: planId,
           status,
-          ...(phone ? { phone } : {}),
         },
         { onConflict: "email" }
       )
