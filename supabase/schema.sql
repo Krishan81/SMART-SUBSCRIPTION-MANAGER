@@ -62,6 +62,24 @@ CREATE TABLE IF NOT EXISTS actions (
     executed_at TIMESTAMPTZ
 );
 
+-- Track actual retention outcomes separately from email acceptance.
+ALTER TABLE actions
+  ADD COLUMN IF NOT EXISTS outcome TEXT NOT NULL DEFAULT 'UNKNOWN';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'actions'::regclass
+      AND conname = 'actions_outcome_check'
+  ) THEN
+    ALTER TABLE actions
+      ADD CONSTRAINT actions_outcome_check
+      CHECK (outcome IN ('RETAINED', 'CHURNED', 'UNCONFIRMED', 'UNKNOWN'));
+  END IF;
+END $$;
+
 -- Indexes for action filtering & queue management
 CREATE INDEX IF NOT EXISTS idx_actions_subscriber_id ON actions(subscriber_id);
 CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status);

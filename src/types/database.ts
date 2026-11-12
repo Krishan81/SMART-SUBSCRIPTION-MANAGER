@@ -10,13 +10,17 @@ export interface Subscriber {
   email: string;
   paypal_subscription_id: string;
   plan: string;
-  status: 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'PAYMENT_FAILED' | 'IN_RECOVERY';
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'PAYMENT_FAILED' | 'IN_RECOVERY';
   risk_score: number; // 0 to 100
   risk_level: RiskLevel;
   risk_reason: string | null;
+  analysis_source?: 'gemini' | 'heuristic' | null;
   recommended_action: AllowedActionType | null;
   created_at: string;
   updated_at?: string;
+  last_payment_at?: string | null;
+  next_payment_at?: string | null;
+  paypal_plan_id?: string | null;
 }
 
 export interface SubscriberEvent {
@@ -28,6 +32,8 @@ export interface SubscriberEvent {
   created_at: string;
 }
 
+export type RetentionOutcome = 'RETAINED' | 'CHURNED' | 'UNCONFIRMED' | 'UNKNOWN';
+
 export interface RiskAction {
   id: string;
   subscriber_id: string;
@@ -36,6 +42,9 @@ export interface RiskAction {
   email_content: string | null;
   created_at: string;
   executed_at?: string | null;
+  email_provider_id?: string | null;
+  email_accepted_at?: string | null;
+  outcome?: RetentionOutcome;
   subscriber?: Subscriber;
 }
 
@@ -45,6 +54,7 @@ export interface RiskAnalysisResult {
   risk_reason: string;
   recommended_action: AllowedActionType;
   email_content: string;
+  analysis_source: 'gemini' | 'heuristic';
 }
 
 export const ALLOWED_ACTION_TYPES: AllowedActionType[] = [
