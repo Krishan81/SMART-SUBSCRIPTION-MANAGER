@@ -6,12 +6,27 @@ import StatCard from '@/components/StatCard';
 import SubscriberCard from '@/components/SubscriberCard';
 import RiskDistributionChart from '@/components/RiskDistributionChart';
 import RiskTrendChart from '@/components/RiskTrendChart';
-import { AlertTriangle, Users, Shield, Activity } from 'lucide-react';
+import { AlertTriangle, Users, Shield, Activity, LogOut } from 'lucide-react';
+import { createAdminClient } from '@/lib/supabase-server';
+import SignOutButton from '@/components/SignOutButton';
 
 export const metadata: Metadata = {
   title: 'Subscription Risk Dashboard',
   description: 'AI-powered subscription risk management system',
 };
+
+// Helper: get current user from Supabase auth, or null if not authenticated
+async function getCurrentUser() {
+  try {
+    const supabase = await createAdminClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return user || null;
+  } catch {
+    return null;
+  }
+}
 
 async function DashboardContent() {
   await connection();
@@ -104,7 +119,7 @@ function DashboardSkeleton() {
   );
 }
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black">
       <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
@@ -121,6 +136,9 @@ export default function DashboardPage() {
                 AI-powered risk scoring · PayPal webhook integration · Gemini analysis
               </p>
             </div>
+            <Suspense fallback={<div className="h-8 w-24 rounded bg-zinc-200 animate-pulse" />}>
+              <SignOutButton />
+            </Suspense>
           </div>
         </div>
       </header>

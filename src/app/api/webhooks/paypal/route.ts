@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPayPalWebhookSignature } from '@/lib/paypal';
 import { processEventAndRecomputeRisk } from '@/lib/risk-engine';
-import { eventExists } from '@/lib/db';
+import { hasPayPalEvent } from '@/lib/db';
 
 type RecordData = Record<string, unknown>;
 
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const alreadyProcessed = await eventExists(paypalEventId);
+    const alreadyProcessed = await hasPayPalEvent(paypalEventId);
 
     if (alreadyProcessed) {
       return NextResponse.json({
