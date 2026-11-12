@@ -1,14 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'node:crypto';
 import { getActions, updateActionStatus } from '@/lib/db';
 import { sendRetentionEmail } from '@/lib/email';
 import { createAdminClient } from '@/lib/supabase-server';
+
+
+function isAuthorized(req: NextRequest): boolean {
+  const secret = process.env.RETENTION_EXECUTION_SECRET;
+
+  if (!secret) return false;
+
+  const supplied = req.headers.get('authorization') || '';
+  const expected = `Bearer ${secret}`;
+
+  const suppliedBuffer = Buffer.from(supplied);
+  const expectedBuffer = Buffer.from(expected);
+
+  return (
+    suppliedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(suppliedBuffer, expectedBuffer)
+  );
+}
 
 export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    // Admin authorization check - only authenticated admins can execute
+    // Admin authorization check
     const supabase = await createAdminClient();
     const {
       data: { user },
@@ -26,6 +45,21 @@ export async function POST(
       return NextResponse.json(
         { error: 'Forbidden: Admin authorization required.' },
         { status: 403 }
+      );
+    }
+
+    // Original RETENTION_EXECUTION_SECRET check for non-admin API access
+    if (!process.env.RETENTION_EXECUTION_SECRET) {
+      return NextResponse.json(
+        { error: 'Retention execution authorization is not configured.' },
+        { status: 503 }
+      );
+    }
+
+    if (!isAuthorized(req)) {
+      return NextResponse.json(
+        { error: 'Unauthorized.' },
+        { status: 401 }
       );
     }
 
@@ -81,24 +115,12 @@ export async function POST(
       );
     }
 
-    let emailId = null;
-
-    try {
-      const emailResult = await sendRetentionEmail({
-        actionId: action.id,
-        to: action.subscriber.email,
-        subject,
-        content: action.email_content,
-      });
-      emailId = emailResult.emailId;
-    } catch (emailError) {
-      console.error('Retention email failed:', emailError);
-      // Do NOT update action status - leave as APPROVED for retry
-      return NextResponse.json(
-        { error: 'Retention email failed. Action remains approved for retry.' },
-        { status: 500 }
-      );
-    }
+    const emailResult = await sendRetentionEmail({
+      actionId: action.id,
+      to: action.subscriber.email,
+      subject,
+      content: action.email_content,
+    });
 
     const updatedAction = await updateActionStatus(
       action.id,
@@ -106,14 +128,16 @@ export async function POST(
     );
 
     if (!updatedAction) {
-      // Email was accepted by provider, but status update failed.
-      // This is a rare edge case; return success with warning.
+      console.error(
+        'Email provider accepted the email, but action status update failed:',
+        action.id,
+        emailResult.emailId
+      );
+
       return NextResponse.json(
         {
-          success: true,
-          message: 'Email accepted by provider, but action status update failed.',
-          emailId,
-          emailAcceptionWarning: true,
+          error: 'Email accepted by provider, but action status update failed.',
+          emailAccepted: true,
         },
         { status: 500 }
       );
@@ -122,7 +146,7 @@ export async function POST(
     return NextResponse.json({
       success: true,
       message: 'Email accepted by the email provider.',
-      emailId,
+      emailId: emailResult.emailId,
       action: updatedAction,
     });
   } catch (error) {
