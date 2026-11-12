@@ -1,15 +1,17 @@
+
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
 function demoModeEnabled() {
   return (
-    process.env.NODE_ENV === "development" &&
-    process.env.PAYPAL_DEMO_MODE === "true"
+    process.env.PAYPAL_DEMO_MODE === "true" &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.VERCEL === "1")
   );
 }
 
-// GET: Load payment history for a user's demo subscriptions
+// GET: Load payment history for a user's demo subscription.
 export async function GET(request: NextRequest) {
   if (!demoModeEnabled()) {
     return NextResponse.json(
@@ -19,7 +21,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const email = request.nextUrl.searchParams.get("email")?.trim();
+    const email = request.nextUrl.searchParams
+      .get("email")
+      ?.trim();
 
     if (!email) {
       return NextResponse.json(
@@ -28,14 +32,18 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const { data: subscriber, error: subscriberError } = await supabase
-      .from("subscribers")
-      .select("id, paypal_subscription_id")
-      .ilike("email", email)
-      .maybeSingle();
+    const { data: subscriber, error: subscriberError } =
+      await supabase
+        .from("subscribers")
+        .select("id, paypal_subscription_id")
+        .ilike("email", email)
+        .maybeSingle();
 
     if (subscriberError) {
-      console.error("Unable to find subscriber:", subscriberError.message);
+      console.error(
+        "Unable to find subscriber:",
+        subscriberError.message
+      );
       throw subscriberError;
     }
 
@@ -51,23 +59,40 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const { data: payments, error: paymentsError } = await supabase
-      .from("payments")
-      .select(
-        "id, paypal_payment_id, paypal_subscription_id, amount, currency, status, paid_at, created_at"
-      )
-      .eq("subscriber_id", subscriber.id)
-      .like("paypal_payment_id", "DEMO-PAY-%")
-      .order("created_at", { ascending: false });
+    const isDemoSubscription =
+      subscriber.paypal_subscription_id?.startsWith("DEMO-");
+
+    if (!isDemoSubscription) {
+      return NextResponse.json({
+        success: true,
+        payments: [],
+        diagnostic: {
+          userFound: true,
+          demoSubscriptionCount: 0,
+          paymentCount: 0,
+        },
+      });
+    }
+
+    const { data: payments, error: paymentsError } =
+      await supabase
+        .from("payments")
+        .select(
+          "id, paypal_payment_id, paypal_subscription_id, amount, currency, status, paid_at, created_at"
+        )
+        .eq("subscriber_id", subscriber.id)
+        .like("paypal_payment_id", "DEMO-PAY-%")
+        .order("created_at", { ascending: false });
 
     if (paymentsError) {
-      console.error("Unable to query payments:", paymentsError.message);
+      console.error(
+        "Unable to query payments:",
+        paymentsError.message
+      );
       throw paymentsError;
     }
 
     const paymentList = payments ?? [];
-    const demoSubscriptionCount =
-      subscriber.paypal_subscription_id?.startsWith("DEMO-") ? 1 : 0;
 
     return NextResponse.json({
       success: true,
@@ -80,11 +105,11 @@ export async function GET(request: NextRequest) {
         paidAt: payment.paid_at,
         createdAt: payment.created_at,
         subscriptionId: payment.paypal_subscription_id,
-        simulated: payment.paypal_payment_id.startsWith("DEMO-PAY-"),
+        simulated: true,
       })),
       diagnostic: {
         userFound: true,
-        demoSubscriptionCount,
+        demoSubscriptionCount: 1,
         paymentCount: paymentList.length,
       },
     });
@@ -98,7 +123,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Simulate a successful or failed demo payment
+// POST: Save a simulated successful or failed payment.
 export async function POST(request: NextRequest) {
   if (!demoModeEnabled()) {
     return NextResponse.json(
@@ -120,7 +145,10 @@ export async function POST(request: NextRequest) {
 
     if (!subscriptionId.startsWith("DEMO-")) {
       return NextResponse.json(
-        { success: false, message: "A valid demo subscription is required" },
+        {
+          success: false,
+          message: "A valid demo subscription is required",
+        },
         { status: 400 }
       );
     }
@@ -142,18 +170,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: subscriber, error: subscriberError } = await supabase
-      .from("subscribers")
-      .select("id, paypal_subscription_id")
-      .eq("paypal_subscription_id", subscriptionId)
-      .maybeSingle();
+    const { data: subscriber, error: subscriberError } =
+      await supabase
+        .from("subscribers")
+        .select("id, paypal_subscription_id")
+        .eq("paypal_subscription_id", subscriptionId)
+        .maybeSingle();
 
     if (subscriberError) {
-      console.error("Unable to find demo subscription:", subscriberError.message);
+      console.error(
+        "Unable to find demo subscription:",
+        subscriberError.message
+      );
       throw subscriberError;
     }
 
-    if (!subscriber) {
+    if (
+      !subscriber ||
+      !subscriber.paypal_subscription_id.startsWith("DEMO-")
+    ) {
       return NextResponse.json(
         { success: false, message: "Demo subscription not found" },
         { status: 404 }
@@ -162,24 +197,28 @@ export async function POST(request: NextRequest) {
 
     const isSuccessful = outcome === "SUCCESS";
 
-    const { data: payment, error: paymentError } = await supabase
-      .from("payments")
-      .insert({
-        subscriber_id: subscriber.id,
-        paypal_payment_id: `DEMO-PAY-${randomUUID()}`,
-        paypal_subscription_id: subscriptionId,
-        amount: amountString,
-        currency: "USD",
-        status: isSuccessful ? "COMPLETED" : "FAILED",
-        paid_at: isSuccessful ? new Date().toISOString() : null,
-      })
-      .select(
-        "id, paypal_payment_id, paypal_subscription_id, amount, currency, status, paid_at"
-      )
-      .single();
+    const { data: payment, error: paymentError } =
+      await supabase
+        .from("payments")
+        .insert({
+          subscriber_id: subscriber.id,
+          paypal_payment_id: `DEMO-PAY-${randomUUID()}`,
+          paypal_subscription_id: subscriptionId,
+          amount: amountString,
+          currency: "USD",
+          status: isSuccessful ? "COMPLETED" : "FAILED",
+          paid_at: isSuccessful ? new Date().toISOString() : null,
+        })
+        .select(
+          "id, paypal_payment_id, paypal_subscription_id, amount, currency, status, paid_at"
+        )
+        .single();
 
     if (paymentError) {
-      console.error("Unable to save demo payment:", paymentError.message);
+      console.error(
+        "Unable to save demo payment:",
+        paymentError.message
+      );
       throw paymentError;
     }
 
@@ -188,8 +227,8 @@ export async function POST(request: NextRequest) {
         success: true,
         simulated: true,
         message: isSuccessful
-          ? "Demo successful payment saved"
-          : "Demo failed payment saved",
+          ? "Demo successful payment saved. No real payment was processed."
+          : "Demo failed payment saved. No real payment was processed.",
         payment: {
           id: payment.id,
           paymentId: payment.paypal_payment_id,

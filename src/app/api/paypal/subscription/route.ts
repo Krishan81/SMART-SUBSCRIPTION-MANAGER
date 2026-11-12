@@ -3,12 +3,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPayPalSubscription } from "@/lib/paypal";
 import { supabase } from "@/lib/supabase";
 
+function demoModeEnabled() {
+  return (
+    process.env.PAYPAL_DEMO_MODE === "true" &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.VERCEL === "1")
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
-    if (
-      process.env.NODE_ENV !== "development" ||
-      process.env.PAYPAL_DEMO_MODE !== "true"
-    ) {
+    if (!demoModeEnabled()) {
       return NextResponse.json(
         { success: false, message: "Not available" },
         { status: 404 }
@@ -57,6 +62,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: true, subscriptions });
   } catch (error) {
     console.error("Failed to fetch subscriptions:", error);
+
     return NextResponse.json(
       { success: false, message: "Failed to fetch subscriptions" },
       { status: 500 }
@@ -109,15 +115,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const isDemoMode =
-      process.env.NODE_ENV === "development" &&
-      process.env.PAYPAL_DEMO_MODE === "true";
+    const isDemoMode = demoModeEnabled();
 
     let subscriptionId: string;
     let status: string;
     let approvalUrl: string | undefined;
 
     if (isDemoMode) {
+      // Simulate an active subscription; no PayPal request is made.
       subscriptionId = `DEMO-${crypto.randomUUID()}`;
       status = "ACTIVE";
     } else {
@@ -141,7 +146,6 @@ export async function POST(request: NextRequest) {
       approvalUrl = approvalLink.href;
     }
 
-    // The shared schema allows one subscriber row per email.
     const { data: subscriber, error } = await supabase
       .from("subscribers")
       .upsert(
@@ -151,6 +155,7 @@ export async function POST(request: NextRequest) {
           paypal_subscription_id: subscriptionId,
           plan: planId,
           status,
+          ...(phone ? { phone } : {}),
         },
         { onConflict: "email" }
       )
@@ -164,7 +169,6 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    // Record the event for the team's event history.
     const { error: eventError } = await supabase
       .from("events")
       .insert({
@@ -180,7 +184,10 @@ export async function POST(request: NextRequest) {
       });
 
     if (eventError) {
-      console.error("Failed to record subscription event:", eventError.message);
+      console.error(
+        "Failed to record subscription event:",
+        eventError.message
+      );
     }
 
     return NextResponse.json({
@@ -198,6 +205,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("Subscription creation failed:", error);
+
     return NextResponse.json(
       {
         success: false,
